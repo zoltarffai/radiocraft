@@ -129,27 +129,29 @@ fn resolve(name: &str, ctx: &Context) -> Option<String> {
     if let Some(v) = ctx.get(name) {
         return Some(v.to_string());
     }
-    if let Some(base) = name.strip_suffix("_enc") {
-        if let Some(v) = ctx.get(base) {
-            return Some(percent_encode(v));
-        }
-        return None;
+    // `_enc` suffix percent-encodes the resolved value; strip it and resolve
+    // the base name (which may itself be a `nextN_title` reference).
+    let (base, enc) = match name.strip_suffix("_enc") {
+        Some(base) => (base, true),
+        None => (name, false),
+    };
+    if let Some(v) = ctx.get(base) {
+        return Some(if enc { percent_encode(v) } else { v.to_string() });
     }
-    if let Some(rest) = name.strip_prefix("next") {
+    if let Some(rest) = base.strip_prefix("next") {
         let mut chars = rest.chars();
         let digit = chars.next()?;
         if !matches!(digit, '1'..='5') || chars.next() != Some('_') {
             return None;
         }
         let field = digit.to_digit(10)? as usize;
-        let tail = &name["next1_".len()..];
+        let tail = &base["next1_".len()..];
+        if tail != "title" {
+            return None;
+        }
         let idx = field - 1;
         let title = ctx.next_titles.get(idx)?;
-        return match tail {
-            "title" => Some(title.clone()),
-            "title_enc" => Some(percent_encode(title)),
-            _ => None,
-        };
+        return Some(if enc { percent_encode(title) } else { title.clone() });
     }
     None
 }
@@ -210,11 +212,11 @@ fn date_token(token: &str, d: NaiveDate) -> Option<String> {
         "YYYY" => Some(d.format("%Y").to_string()),
         "YY" => Some(d.format("%y").to_string()),
         "MM" => Some(d.format("%m").to_string()),
-        "M" => Some(d.format("%m").trim_start_matches('0').to_string()),
+        "M" => Some(d.format("%m").to_string().trim_start_matches('0').to_string()),
         "MONTHNAME" => Some(d.format("%B").to_string()),
         "MONTHNAMESHORT" => Some(d.format("%b").to_string()),
         "DD" => Some(d.format("%d").to_string()),
-        "D" => Some(d.format("%d").trim_start_matches('0').to_string()),
+        "D" => Some(d.format("%d").to_string().trim_start_matches('0').to_string()),
         "DAYNAME" => Some(d.format("%A").to_string()),
         "DAYNAMESHORT" => Some(d.format("%a").to_string()),
         _ => None, // unknown token: literal braces restored by caller
@@ -242,13 +244,14 @@ mod tests {
     use chrono::{FixedOffset, TimeZone};
 
     fn song() -> SongData {
-        let mut s = SongData::default();
-        s.artist = "Cher".to_string();
-        s.title = "Believe".to_string();
-        s.album = "Believe Hits".to_string();
-        s.duration = 218.0; // 00:03:38
-        s.track_type = TrackType::Music as i32;
-        s
+        SongData {
+            artist: "Cher".to_string(),
+            title: "Believe".to_string(),
+            album: "Believe Hits".to_string(),
+            duration: 218.0, // 00:03:38
+            track_type: TrackType::Music as i32,
+            ..Default::default()
+        }
     }
 
     fn ctx_with_track() -> Context {
@@ -260,7 +263,7 @@ mod tests {
 
     #[test]
     fn unknown_vars_pass_through() {
-        let ctx = Context::new();
+        let mut ctx = Context::new();
         ctx.set("station_name", "My Station");
         let engine = TemplateEngine::new();
         let out = engine.render("Hello $station_name$, $does_not_exist$!", &ctx);
@@ -304,8 +307,11 @@ mod tests {
         // beyond 5 -> passthrough
         ctx.set_next_tracks(["a", "b", "c", "d", "e"]);
         assert_eq!(engine.render("$next6_title$", &ctx), "$next6_title$");
-        // missing slot -> passthrough
+        // slots present up to the five seeded tracks
         assert_eq!(engine.render("$next3_title$", &ctx), "c");
+        assert_eq!(engine.render("$next5_title$", &ctx), "e");
+        // missing slots beyond the seeded list -> passthrough
+        ctx.set_next_tracks(["a", "b"]);
         assert_eq!(engine.render("$next4_title$", &ctx), "$next4_title$");
         // _enc on next
         let mut ctx2 = Context::new();
@@ -370,6 +376,7 @@ mod tests {
     #[test]
     fn clock_format() {
         let dt = FixedOffset::east_opt(0)
+            .unwrap()
             .with_ymd_and_hms(2026, 10, 29, 13, 45, 0)
             .unwrap()
             .naive_local();

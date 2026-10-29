@@ -11,6 +11,8 @@ use serde::{Deserialize, Serialize};
 /// Data-level sentinels used throughout the schema (docs/01 convention notes:
 /// these are *literal defaults*, not NULL; the whole app logic keys on them).
 pub mod sentinel {
+    use chrono::{NaiveDateTime, ParseResult};
+
     /// `datetime DEFAULT '2002-01-01 00:00:01'`: "never played / no date set"
     /// (a deliberate fake epoch applied to `date_played`, `artist_played`,
     /// `title_played`, `album_played`, `start_date`, `end_date`, `queuelist.ETA`,
@@ -32,15 +34,15 @@ pub mod sentinel {
     pub const NO_IMAGE: &str = "no_image.jpg";
     pub const URL_UNSET: &str = "http://";
 
-    /// The fake-epoch instant as a chrono value (parsed at first use; the
-    /// literal is fixed by schema, parsing cannot fail).
+    /// Parse a schema datetime literal (`YYYY-MM-DD HH:MM:SS`).
+    pub fn parse_dt(text: &str) -> ParseResult<NaiveDateTime> {
+        NaiveDateTime::parse_from_str(text, "%Y-%m-%d %H:%M:%S")
+    }
+
+    /// The fake-epoch instant as a chrono value (the literal is fixed by schema,
+    /// parsing cannot fail).
     pub fn never_played_dt() -> NaiveDateTime {
-        chrono::NaiveDateTime::parse_str_legacy(NEVER_PLAYED).unwrap_or(
-            chrono::NaiveDate::from_ymd_opt(2002, 1, 1)
-                .unwrap()
-                .and_hms_opt(0, 0, 1)
-                .unwrap(),
-        )
+        parse_dt(NEVER_PLAYED).expect("valid schema sentinel")
     }
 }
 

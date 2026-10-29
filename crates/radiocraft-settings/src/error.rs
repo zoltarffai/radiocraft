@@ -12,6 +12,11 @@ pub enum Error {
     /// Malformed XML (message includes the offending construct).
     #[error("invalid XML in {}: {message}", path.display())]
     Xml { path: PathBuf, message: String },
+
+    /// Operation requires a file-backed document, but the settings object was
+    /// built in memory.
+    #[error("operation invalid: {0}")]
+    InvalidOperation(&'static str),
 }
 
 impl Error {

@@ -1,6 +1,7 @@
 //! RadioCraft domain model: track types, SongData, cues, playlist, scheduler types.
 
 pub mod booking;
+pub mod model;
 pub mod events;
 pub mod playlist;
 pub mod rotation;

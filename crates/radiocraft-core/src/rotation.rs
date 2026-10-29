@@ -12,10 +12,24 @@
 //! *and* SQLite-style rebuild while preserving the
 //! `NOW() - INTERVAL n MINute` replay-avoidance semantics of the original).
 
-use chrono::{NaiveDateTime, NaiveTime};
+use chrono::{Datelike, NaiveDateTime, NaiveTime};
 use serde::{Deserialize, Serialize};
 
 use crate::booking::sentinel;
+
+/// Map a chrono `Weekday` to the schema day-number (0 = Sunday ... 6 =
+/// Saturday) used by [`DayMask`] bit positions.
+pub fn weekday_index(w: chrono::Weekday) -> u32 {
+    match w {
+        chrono::Weekday::Sun => 0,
+        chrono::Weekday::Mon => 1,
+        chrono::Weekday::Tue => 2,
+        chrono::Weekday::Wed => 3,
+        chrono::Weekday::Thu => 4,
+        chrono::Weekday::Fri => 5,
+        chrono::Weekday::Sat => 6,
+    }
+}
 
 /// Day-of-week bitmask (`events.day` / rotation day list).
 ///
@@ -45,7 +59,7 @@ impl DayMask {
 
     /// True when the mask accepts `when`'s weekday.
     pub fn matches_date(&self, when: NaiveDateTime) -> bool {
-        self.contains_weekday(when.date().weekday().num_uses_sun())
+        self.contains_weekday(weekday_index(Datelike::weekday(&when.date())))
     }
 
     /// Parse the RadioDJ `day` column text: `'&'` = all days, otherwise a
@@ -294,7 +308,7 @@ impl Rotation {
 
 /// Pick the highest-priority rotation(s) matching `now`; priority desc, then
 /// id asc for stable ordering. Empty when nothing matches.
-pub fn select_rotations<'a>(all: &'a [Rotation], now: NaiveDateTime) -> Vec<&'a Rotation> {
+pub fn select_rotations(all: &[Rotation], now: NaiveDateTime) -> Vec<&Rotation> {
     let mut v: Vec<&Rotation> = all.iter().filter(|r| r.matches_time(now)).collect();
     v.sort_by(|a, b| b.priority.cmp(&a.priority).then(a.id.cmp(&b.id)));
     v

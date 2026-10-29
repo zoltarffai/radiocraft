@@ -87,7 +87,7 @@ impl KvStore {
                                     cur_value = Some(String::new());
                                 }
                             }
-                            Ok(other) => {
+                            Ok(_) => {
                                 return Err(Error::xml(
                                     &path,
                                     format!("unexpected event inside <{}>", if want_key { "Key" } else { "Value" }),
@@ -157,7 +157,7 @@ impl KvStore {
     }
 
     /// Write a settings file to disk.
-    pub fn save(&self, path: impl AsRef<Path>) -> Result<(), Error> {
+    pub fn save(&self, path: impl AsRef<Path>) -> Result<(), crate::error::Error> {
         let path = path.as_ref();
         std::fs::write(path, self.to_bytes()).map_err(|e| Error::io(path, e))
     }
@@ -214,12 +214,13 @@ impl KvStore {
 }
 
 fn write_text_element(writer: &mut Writer<Vec<u8>>, name: &str, content: &str) {
-    let mut start = BytesStart::new(name);
     if content.is_empty() {
-        // RadioDJ writes empty values self-closed: `<Value />`.
-        start.set_self_closed();
-        writer.write_event(Event::Start(start)).expect("writing to Vec<u8> is infallible");
+        // RadioDJ (DataSet.WriteXml) writes empty values self-closed as `<Value />`.
+        writer
+            .write(format_args!("<{name} />"))
+            .expect("writing to Vec<u8> is infallible");
     } else {
+        let start = BytesStart::new(name);
         writer.write_event(Event::Start(start)).expect("writing to Vec<u8> is infallible");
         let escaped = escape_xml(content);
         writer
@@ -318,45 +319,46 @@ macro_rules! settings_struct {
     (
         $(#[$outer:meta])*
         $vis:vis struct $name:ident {
-            $( $key:literal => $field:ident : $ty:ty = $default:tt , )*
+            $( $(#[$field_attr:meta])? $key:literal => $field:ident : $ty:ty = $default:tt , )*
         }
     ) => {
         #[derive(Debug, Clone, PartialEq)]
         $(#[$outer])*
         $vis struct $name {
-            $( $field: $ty , )*
+            $( $(#[$field_attr])? $field: $ty , )*
             /// Keys not modeled by this struct, preserved for round-trips.
             extras: Vec<(String, String)>,
         }
 
         impl Default for $name {
             fn default() -> Self {
-                Self { $( $field: $default , )* extras: Vec::new() }
+                Self { $( $field: $default.into() , )* extras: Vec::new() }
             }
         }
 
-        impl $name {
-            /// Known keys in file order.
-            pub const KEYS: &'static [&'static str] = &[$($key),*];
+        paste::paste! {
+            impl $name {
+                /// Known keys in file order.
+                pub const KEYS: &'static [&'static str] = &[$($key),*];
 
-            $(
-                /// Typed getter.
-                pub fn $field(&self) -> &$ty {
-                    &self.$field
-                }
+                $(
+                    /// Typed getter.
+                    pub fn $field(&self) -> &$ty {
+                        &self.$field
+                    }
 
-                /// Typed setter.
-                pub fn set_ $field (&mut self, value: $ty) {
-                    self.$field = value;
-                }
-            )*
+                    /// Typed setter.
+                    pub fn [<set_ $field>](&mut self, value: $ty) {
+                        self.$field = value;
+                    }
+                )*
 
             /// Build from a parsed store, applying declared defaults.
-            pub fn from_kv(store: &KvStore) -> Self {
+            pub fn from_kv(store: &crate::kvstore::KvStore) -> Self {
                 let mut out = Self::default();
                 $(
                     if let Some(raw) = store.get($key) {
-                        if let Some(v) = <$ty as SettingValue>::parse_opt(raw) {
+                        if let Some(v) = <$ty as crate::kvstore::SettingValue>::parse_opt(raw) {
                             out.$field = v;
                         }
                     }
@@ -371,10 +373,10 @@ macro_rules! settings_struct {
             }
 
             /// Render back to a store (known keys in declared order, extras after).
-            pub fn to_kv(&self) -> KvStore {
-                let mut store = KvStore::new();
+            pub fn to_kv(&self) -> crate::kvstore::KvStore {
+                let mut store = crate::kvstore::KvStore::new();
                 $(
-                    store.set($key, SettingValue::format(&self.$field));
+                    store.set($key, crate::kvstore::SettingValue::format(&self.$field));
                 )*
                 for (k, v) in &self.extras {
                     store.set(k.clone(), v.clone());
@@ -383,12 +385,12 @@ macro_rules! settings_struct {
             }
 
             /// Load straight from a settings file.
-            pub fn load(path: impl AsRef<std::path::Path>) -> Result<Self, Error> {
-                Ok(Self::from_kv(&KvStore::load(path)?))
+            pub fn load(path: impl AsRef<std::path::Path>) -> Result<Self, crate::error::Error> {
+                Ok(Self::from_kv(&crate::kvstore::KvStore::load(path)?))
             }
 
             /// Save straight to a settings file.
-            pub fn save(&self, path: impl AsRef<std::path::Path>) -> Result<(), Error> {
+            pub fn save(&self, path: impl AsRef<std::path::Path>) -> Result<(), crate::error::Error> {
                 self.to_kv().save(path)
             }
 
@@ -411,7 +413,7 @@ macro_rules! settings_struct {
             /// Raw string lookup, mirrors of the host `GetSetting` API.
             pub fn get_raw(&self, key: &str) -> Option<String> {
                 match key {
-                    $( $key => Some(SettingValue::format(&self.$field)), )*
+                    $( $key => Some(crate::kvstore::SettingValue::format(&self.$field)), )*
                     _ => self.extras.iter().find(|(k, _)| k == key).map(|(_, v)| v.clone()),
                 }
             }
@@ -422,7 +424,7 @@ macro_rules! settings_struct {
                 match key {
                     $(
                         $key => {
-                            match <$ty as SettingValue>::parse_opt(value) {
+                            match <$ty as crate::kvstore::SettingValue>::parse_opt(value) {
                                 Some(v) => { self.$field = v; true }
                                 None => false,
                             }
@@ -431,6 +433,7 @@ macro_rules! settings_struct {
                     _ => { self.set_extra(key, value); true }
                 }
             }
+        }
         }
     };
 }
@@ -493,7 +496,7 @@ mod tests {
         let again = KvStore::parse(&text).unwrap();
         assert_eq!(store, again);
         // Layout markers: declaration, root element, row shape, self-closed empty.
-        assert!(text.start_with("<?xml version=\"1.0\" standalone=\"yes\"?>"));
+        assert!(text.starts_with("<?xml version=\"1.0\" encoding=\"utf-8\" standalone=\"yes\"?>"));
         assert!(text.contains("<NewDataSet>"));
         assert!(text.contains("<Settings>"));
         assert!(text.contains("<Key>Priority</Key>"));

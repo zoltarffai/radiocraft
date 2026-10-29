@@ -149,30 +149,42 @@ pub trait Host {
     // ---- core state: volume/mute/autodj -----------------------------------
 
     /// `float32 get_MainVolume()`
-    fn main_volume(&self) -> f32;
+    fn main_volume(&self) -> f32 {
+        0.0
+    }
     /// `void set_MainVolume(float32 'value')`
-    fn set_main_volume(&self, value: f32);
+    fn set_main_volume(&self, _value: f32) {}
     /// `bool get_MainMute()`
-    fn main_mute(&self) -> bool;
+    fn main_mute(&self) -> bool {
+        false
+    }
     /// `void set_MainMute(bool 'value')`
-    fn set_main_mute(&self, value: bool);
+    fn set_main_mute(&self, _value: bool) {}
     /// `bool get_MainAutoDJ()`
-    fn main_autodj(&self) -> bool;
+    fn main_autodj(&self) -> bool {
+        false
+    }
     /// `void set_MainAutoDJ(bool 'value')`
-    fn set_main_autodj(&self, value: bool);
+    fn set_main_autodj(&self, _value: bool) {}
     /// `float32 get_MainTrackVolume()`
-    fn main_track_volume(&self) -> f32;
+    fn main_track_volume(&self) -> f32 {
+        0.0
+    }
     /// `void set_MainTrackVolume(float32 'value')`
-    fn set_main_track_volume(&self, value: f32);
+    fn set_main_track_volume(&self, _value: f32) {}
     /// `bool get_Pause()`
-    fn pause(&self) -> bool;
+    fn pause(&self) -> bool {
+        false
+    }
     /// `void set_Pause(bool 'value')`
-    fn set_pause(&self, value: bool);
+    fn set_pause(&self, _value: bool) {}
 
     // ---- main playlist ------------------------------------------------------
 
     /// `List<TrackPlayer> get_MainPlaylist()` — playlist rows as SongData.
-    fn main_playlist(&self) -> Vec<SongData>;
+    fn main_playlist(&self) -> Vec<SongData> {
+        Vec::new()
+    }
     /// `void set_MainPlaylist(List<TrackPlayer> 'value')`
     fn set_main_playlist(&self, playlist: &[SongData]) {
         let _ = playlist;
@@ -181,19 +193,25 @@ pub trait Host {
     // ---- playlist / playout control -----------------------------------------
 
     /// `void Add2Playlist(int64 trackID, int PlaylistPosition = 0)`
-    fn add_to_playlist(&self, track_id: i64, position: i32);
+    fn add_to_playlist(&self, _track_id: i64, _position: i32) {}
     /// `bool AddPlaylist(int64 PlaylistID, int32 PlaylistPosition)`
-    fn add_playlist(&self, playlist_id: i64, position: i32) -> bool;
+    fn add_playlist(&self, _playlist_id: i64, _position: i32) -> bool {
+        false
+    }
     /// `void DeleteFromPlaylist(int32 trackNumber)`
-    fn delete_from_playlist(&self, track_number: i32);
+    fn delete_from_playlist(&self, _track_number: i32) {}
     /// `void PlayPlaylistTrack(int32 trackNumber, bool WithFade)`
-    fn play_playlist_track(&self, track_number: i32, with_fade: bool);
+    fn play_playlist_track(&self, _track_number: i32, _with_fade: bool) {}
     /// `void PlayCartByNumber(int32 cartNumber)`
-    fn play_cart_by_number(&self, cart_number: i32);
+    fn play_cart_by_number(&self, _cart_number: i32) {}
     /// `bool LoadRotationID(int64 rotationID)`
-    fn load_rotation_id(&self, rotation_id: i64) -> bool;
+    fn load_rotation_id(&self, _rotation_id: i64) -> bool {
+        false
+    }
     /// `bool RunEvent(int64 eventID)`
-    fn run_event(&self, event_id: i64) -> bool;
+    fn run_event(&self, _event_id: i64) -> bool {
+        false
+    }
 
     // ---- misc state get/set --------------------------------------------------
 
@@ -256,17 +274,25 @@ pub trait Host {
     /// `void set_titleMain(string 'value')`
     fn set_title_main(&self, _value: &str) {}
     /// `string get_ApplicationPath()`
-    fn application_path(&self) -> PathBuf;
+    fn application_path(&self) -> PathBuf {
+        PathBuf::new()
+    }
 
     /// `int32[] get_GetSoundCard(SoundCard.CardTypes sc)` — card index list
     /// for the given card type; raw i32 passthrough because the original
     /// `CardTypes` enum members are not recoverable.
-    fn sound_cards(&self, card_type: i32) -> Vec<i32>;
+    fn sound_cards(&self, _card_type: i32) -> Vec<i32> {
+        Vec::new()
+    }
     /// `int32 get_GetTypeColor(int32 TrackType)` — OLE color for a song type.
-    fn get_type_color(&self, track_type: i32) -> i32;
+    fn get_type_color(&self, _track_type: i32) -> i32 {
+        0
+    }
     /// `string get_GetTypeTitle(int32 TrackType)` — display title per type
     /// (docs/03 §6 track-type registry).
-    fn get_type_title(&self, track_type: i32) -> String;
+    fn get_type_title(&self, _track_type: i32) -> String {
+        String::new()
+    }
 
     // ---- command-style write-only properties (original `set_*` members) -----
 
@@ -304,45 +330,61 @@ pub trait Host {
     // ---- data access ----------------------------------------------------------
 
     /// `string GetSetting(string sender, string Key, string defaultValue = "0")`
-    fn get_setting(&self, sender: &str, key: &str, default: &str) -> String;
+    fn get_setting(&self, _sender: &str, _key: &str, _default: &str) -> String {
+        String::new()
+    }
     /// `bool SaveSetting(string sender, string Key, string Value)`
-    fn save_setting(&self, sender: &str, key: &str, value: &str) -> bool;
+    fn save_setting(&self, _sender: &str, _key: &str, _value: &str) -> bool {
+        false
+    }
     /// `int32 MysqlQuery(string query, ref DataSet ds)` — returns the JSON
     /// encoding of the DataSet (tables → arrays of row objects) the caller
     /// would have received through the `ref DataSet` out-param.
-    fn mysql_query(&self, query: &str) -> String;
+    fn mysql_query(&self, _query: &str) -> String {
+        String::new()
+    }
     /// `int32 MysqlInsert(string query)` — affected rows / autoincrement id.
-    fn mysql_insert(&self, query: &str) -> i32;
+    fn mysql_insert(&self, _query: &str) -> i32 {
+        0
+    }
     /// `int32 GetSongs(string sqlFilter, ref DataGridView dgv)` — matching
     /// rows as SongData (row count = Vec length).
-    fn get_songs(&self, sql_filter: &str) -> Vec<SongData>;
+    fn get_songs(&self, _sql_filter: &str) -> Vec<SongData> {
+        Vec::new()
+    }
     /// `int64 ImportFile(string[] filePaths, bool fromURL, long subcatID = 0, long genreID = 0)`
     /// — returns the new song id (0 on failure).
     fn import_file(
         &self,
-        file_paths: &[PathBuf],
-        from_url: bool,
-        subcat_id: i64,
-        genre_id: i64,
-    ) -> i64;
+        _file_paths: &[PathBuf],
+        _from_url: bool,
+        _subcat_id: i64,
+        _genre_id: i64,
+    ) -> i64 {
+        0
+    }
     /// `bool UpdateHistory(SongData Track)`
-    fn update_history(&self, track: &SongData) -> bool;
+    fn update_history(&self, _track: &SongData) -> bool {
+        false
+    }
 
     // ---- UI -------------------------------------------------------------------
 
     /// Queues one of the `Show*Window`/editor window requests for the host GUI.
-    fn show_ui(&self, request: PluginUiRequest);
+    fn show_ui(&self, _request: PluginUiRequest) {}
 
     // ---- plugin actions / diagnostics ------------------------------------------
 
     /// `List<EventAction> GetPluginActions()` — actions offered by host-side
     /// feature plugins reachable through the host (mirrors plugin.actions()).
-    fn get_plugin_actions(&self) -> Vec<EventAction>;
+    fn get_plugin_actions(&self) -> Vec<EventAction> {
+        Vec::new()
+    }
     /// `void RunPluginAction(EventAction EventItem, string[] args = null)`
-    fn run_plugin_action(&self, action: &EventAction, args: &[String]);
+    fn run_plugin_action(&self, _action: &EventAction, _args: &[String]) {}
     /// `void DebugAddLine(string entry)` — append to host debug log.
     fn debug_add_line(&self, entry: &str);
     /// `void StateChanged(Features Feature, object e)` — plugin announces a
     /// state change to the host for redistribution.
-    fn state_changed(&self, state: &StateInfo);
+    fn state_changed(&self, _state: &StateInfo) {}
 }
