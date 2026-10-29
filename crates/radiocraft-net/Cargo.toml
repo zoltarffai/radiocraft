@@ -3,15 +3,22 @@ name = "radiocraft-net"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+description = "RadioDJ integrations: now playing metadata export, web console + API, AutoStart."
 
 [dependencies]
-radiocraft-core.workspace = true
+radiocraft-core = { path = "../radiocraft-core" }
+radiocraft-settings = { path = "../radiocraft-settings" }
 serde.workspace = true
 serde_json.workspace = true
 chrono.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
-tokio.workspace = true
+tokio = { version = "1", features = ["rt", "time", "sync", "macros"] }
 tiny_http = "0.12"
 ureq = { version = "2", features = ["json"] }
 serialport = { version = "4", default-features = false }
+encoding_rs = "0.8"
+quick-xml = "0.37"
+
+[dev-dependencies]
+tempfile = "3"

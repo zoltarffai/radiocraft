@@ -7,7 +7,7 @@
 //! EBU R128 formula (stage 1 high-shelf + stage 2 high-pass) so the
 //! measurement is correct for any internal sample rate.
 
-use crate::util::{clamp_f32, db_to_lin};
+use crate::util::{clamp_f32, lin_to_db};
 
 /// Loudness-unit offset used by the BS.1770 / EBU R128 meters.
 pub const LU_OFFSET: f64 = -0.691;
@@ -240,7 +240,8 @@ impl LoudnessMeter {
         let mut n = 0usize;
         for &b in &self.blocks {
             if b > GATE_OUTER_DB {
-                sum += db_to_lin(b - LU_OFFSET);
+                // uncalibrated block power (dB -> power, NOT amplitude)
+                sum += 10.0f64.powf((b - LU_OFFSET) / 10.0);
                 n += 1;
             }
         }
@@ -254,7 +255,7 @@ impl LoudnessMeter {
         let mut n2 = 0usize;
         for &b in &self.blocks {
             if b > GATE_OUTER_DB && b >= rel {
-                sum2 += db_to_lin(b - LU_OFFSET);
+                sum2 += 10.0f64.powf((b - LU_OFFSET) / 10.0);
                 n2 += 1;
             }
         }
@@ -363,8 +364,19 @@ impl TruePeakMeter {
         let pr = self.ch[1].push(right) as f64;
         self.max = self.max.max(pl).max(pr);
     }
+    /// Observe an interleaved stereo buffer.
+    pub fn observe_buffer(&mut self, buf: &[f32]) {
+        for pair in buf.chunks_exact(2) {
+            self.observe(pair[0], pair[1]);
+        }
+    }
+
     pub fn max(&self) -> f64 {
         self.max
+    }
+    /// Max true-peak in dBTP (silence maps to a very low dB value).
+    pub fn true_peak_db(&self) -> f64 {
+        lin_to_db(self.max)
     }
     pub fn reset(&mut self) {
         self.ch = [TruePeakCh::new(), TruePeakCh::new()];

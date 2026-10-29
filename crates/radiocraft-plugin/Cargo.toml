@@ -18,3 +18,7 @@ serde_json.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
 libloading = "0.8"
+
+[dev-dependencies]
+# Integration tests use the crate's own `test-util` feature.
+radiocraft-plugin = { path = ".", features = ["test-util"] }

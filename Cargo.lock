@@ -3840,10 +3840,14 @@ name = "radiocraft-net"
 version = "0.1.0"
 dependencies = [
  "chrono",
+ "encoding_rs",
+ "quick-xml 0.37.5",
  "radiocraft-core",
+ "radiocraft-settings",
  "serde",
  "serde_json",
  "serialport",
+ "tempfile",
  "thiserror 2.0.21",
  "tiny_http",
  "tokio",
@@ -3857,6 +3861,7 @@ version = "0.1.0"
 dependencies = [
  "libloading 0.8.9",
  "radiocraft-core",
+ "radiocraft-plugin",
  "serde",
  "serde_json",
  "thiserror 2.0.21",

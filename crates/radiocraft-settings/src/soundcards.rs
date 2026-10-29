@@ -1,7 +1,5 @@
 //! `settings_soundcards.xml` — audio-device / fade options (docs/02 §1, §2).
 
-
-
 settings_struct! {
     /// Options persisted in `settings_soundcards.xml`.
     pub struct SoundcardSettings {

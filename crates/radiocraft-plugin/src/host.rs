@@ -1,26 +1,33 @@
 //! Host-facing API — the clean-room Rust port of `rdjInterface.IHost`.
 //!
-//! Every method below maps 1:1 onto an observed interface member from a real
-//! RadioDJ-family app (IL data spec in `analysis/plugin-api-overrides.txt` /
-//! `analysis/ihost-methods.txt`). The original C#-ish signature is recorded in
-//! each doc comment. Notable shape conversions:
+//! The authoritative contract is the decompiled interface at
+//! `analysis/decompiled-csharp/PluginInterface/rdjInterface/IHost.cs`. Every
+//! method below maps 1:1 onto a member of that interface, and the original C#
+//! signature is recorded in each doc comment. Notable shape conversions:
 //!
-//! - C# `ref DataSet`/`ref DataTable` out-params (`MysqlQuery`) become plain
-//!   return values carrying JSON-encoded text (`String` of a DataSet-shaped
-//!   object; `MysqlInsert` returns the affected-rows count).
-//! - `GetSongs(sqlFilter, ref DataGridView&) -> int32` becomes
-//!   `get_songs(sql_filter) -> Vec<SongData>`; the row count falls out of the
-//!   vector length.
-//! - The 73-property get/set idiom becomes plain Rust getters/setters
-//!   (`get_MainVolume` → `main_volume`, `set_MainVolume` → `set_main_volume`).
-//! - Command-style write-only properties (`set_StopPlaying`, `set_ClearPlaylist`,
-//!   …) become methods named after the property.
+//! - C# `ref DataSet`/`ref DataGridView` out-params (`MysqlQuery`,
+//!   `GetSongs`) become plain return values carrying JSON text (`String` of
+//!   the query results; `get_songs` returns the rows as `Vec<SongData>`).
+//! - `MysqlInsert(string query)` (parameterized) becomes
+//!   `mysql_insert(sql, args) -> i32` (affected rows).
+//! - The property get/set idiom becomes plain Rust getters/setters
+//!   (`MainVolume { get; set; }` → `main_volume`/`set_main_volume`).
+//! - Write-only properties (`StopPlaying { set; }`, `ClearPlaylist { set; }`,
+//!   …) become methods named after the property (`set_stop_playing`).
+//! - `int[] GetSoundCard(CardTypes)` takes the card type as `i32`
+//!   (the `SoundCard.CardTypes` enum value) and returns `Vec<i32>`.
+//! - `GetSongs(string sql, ref DataGridView dgv)` keeps SQL placeholders as a
+//!   plain `&str`.
 //! - UI window requests (`Show*`) are modeled as a serializable
 //!   [`PluginUiRequest`] enum the host queues for its GUI layer.
 //! - `StateChanged(Features, object)` becomes [`StateInfo`] with a JSON payload.
+//! - `ImportFile` overloads collapse into one method taking an
+//!   [`ImportRequest`] enum.
 //!
 //! All methods take `&self` (C# property setters mutate through a shared
-//! reference too); host implementations use interior mutability.
+//! reference too); host implementations use interior mutability. Every method
+//! has a default implementation so hosts only implement what they support and
+//! the ABI vtable fills the rest.
 
 use std::path::PathBuf;
 
@@ -29,7 +36,7 @@ use serde::{Deserialize, Serialize};
 
 /// One action a plugin can run, port of
 /// `rdjInterface.Events.EventAction { name, id, args[] }` (docs/03 §3).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EventAction {
     /// Human-readable action name as shown in the event editor.
     pub name: String,
@@ -45,16 +52,29 @@ impl EventAction {
     pub fn new(name: impl Into<String>) -> Self {
         Self { name: name.into(), id: 0, args: Vec::new() }
     }
+    pub fn with_args(name: impl Into<String>, args: &[&str]) -> Self {
+        Self { name: name.into(), id: 0, args: args.iter().map(|s| (*s).to_string()).collect() }
+    }
+
+    /// The `Name (Arg1, Arg2)` display form the event editor shows.
+    pub fn display_string(&self) -> String {
+        if self.args.is_empty() {
+            self.name.clone()
+        } else {
+            format!("{} ({})", self.name, self.args.join(", "))
+        }
+    }
 }
 
 /// Feature discriminator for host state notifications, stand-in for the
 /// `rdjInterface.Features` enum. The exact IL enum values are not recoverable
 /// (obfuscated), so variants carry the semantics observed in plugin IL call
 /// sites and `Other(i32)` preserves any unrecognized raw value.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum StateChange {
     /// Main player just started playing a track.
+    #[default]
     PlayerStarted,
     /// Main player finished the current track.
     PlayerEnded,
@@ -87,7 +107,7 @@ pub enum StateChange {
 }
 
 /// Payload of the original `StateChanged(Features Feature, object e)` call.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct StateInfo {
     pub feature: StateChange,
     /// The `object e` argument as JSON (often a SongData or player handle).
@@ -106,19 +126,20 @@ impl StateInfo {
 
 /// A UI window the host is asked to open, modeling the `Show*` members of
 /// IHost. The host queues these for its GUI/event-loop layer.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+// No `PartialEq`: core's `SongData` does not implement it and UI payloads carry songs.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum PluginUiRequest {
-    /// `void ShowTrackDetails(TrackPlayer trackData, bool RefreshPlaylist, int PlaylistPosition = 0)`
+    /// `void ShowTrackDetails(TrackPlayer trackData, bool RefreshPlaylist, int Position = -1)`
     TrackDetails {
         track: SongData,
         refresh_playlist: bool,
         #[serde(default)]
         position: i32,
     },
-    /// `void ShowTrackDetailsWindow(TrackPlayer TrackData)`
+    /// `void ShowTrackDetailsWindow(TrackPlayer trackData)`
     TrackDetailsWindow { track: SongData },
-    /// `void ShowTrackEditor(TrackPlayer trackData, string PluginName, int Position = 0)`
+    /// `void ShowTrackEditor(TrackPlayer trackData, string PluginName, int Position = -1)`
     TrackEditor {
         track: SongData,
         plugin_name: String,
@@ -126,14 +147,15 @@ pub enum PluginUiRequest {
         position: i32,
     },
     /// `void ShowCategoriesEditor()`
+    #[default]
     CategoriesEditor,
-    /// `void ShowTracksWindow(string plugName, int trackType, double minTrackDuration, int Position = 0)`
+    /// `void ShowTracksWindow(string plugName, int trackType, double maxTrackDuration, int Position = -1)`
     TracksWindow {
         plugin_name: String,
         #[serde(default)]
         track_type: i32,
         #[serde(default)]
-        min_track_duration: f64,
+        max_track_duration: f64,
         #[serde(default)]
         position: i32,
     },
@@ -141,250 +163,344 @@ pub enum PluginUiRequest {
     ImportFolder,
 }
 
-/// The host API surface available to plugins: a Rust-shaped, JSON-transported
-/// port of the 73 IHost members. See module docs for mapping rules. Methods
-/// that the original exposes but RadioCraft's GUI/DB layer may not implement
-/// yet carry a no-op / default-impl.
-pub trait Host {
-    // ---- core state: volume/mute/autodj -----------------------------------
+/// Argument for [`Host::import_file`] — the three `ImportFile` overloads of
+/// IHost collapsed into one enum.
+// No `PartialEq`: core's `SongData` does not implement it and import payloads carry songs.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ImportRequest {
+    /// `long ImportFile(string FilePath, bool fromURL, long subcatID = 0, long genreID = 0)`
+    FilePath {
+        path: String,
+        #[serde(default)]
+        from_url: bool,
+        #[serde(default)]
+        subcat_id: i64,
+        #[serde(default)]
+        genre_id: i64,
+    },
+    /// `long ImportFile(TrackPlayer FileData)`
+    Track {
+        track: SongData,
+    },
+    /// `long ImportFile(string[] filePaths, bool fromURL, long subcatID = 0, long genreID = 0)`
+    FilePaths {
+        paths: Vec<String>,
+        #[serde(default)]
+        from_url: bool,
+        #[serde(default)]
+        subcat_id: i64,
+        #[serde(default)]
+        genre_id: i64,
+    },
+}
 
-    /// `float32 get_MainVolume()`
-    fn main_volume(&self) -> f32 {
-        0.0
+impl Default for ImportRequest {
+    fn default() -> Self {
+        ImportRequest::FilePath {
+            path: String::new(),
+            from_url: false,
+            subcat_id: 0,
+            genre_id: 0,
+        }
     }
-    /// `void set_MainVolume(float32 'value')`
-    fn set_main_volume(&self, _value: f32) {}
-    /// `bool get_MainMute()`
-    fn main_mute(&self) -> bool {
-        false
-    }
-    /// `void set_MainMute(bool 'value')`
-    fn set_main_mute(&self, _value: bool) {}
-    /// `bool get_MainAutoDJ()`
+}
+
+/// The host API surface available to plugins: a Rust-shaped, JSON-transported
+/// port of the `rdjInterface.IHost` members (139 lines, authoritative source:
+/// `analysis/decompiled-csharp/PluginInterface/rdjInterface/IHost.cs`).
+///
+/// Every method has a default implementation (no-op / default value), matching
+/// the "any subset of host features may be available" semantics of the ABI
+/// vtable (NULL slots).
+pub trait Host {
+    // ---- IHost properties ---------------------------------------------------
+
+    /// `bool MainAutoDJ { get; set; }`
     fn main_autodj(&self) -> bool {
         false
     }
-    /// `void set_MainAutoDJ(bool 'value')`
+    /// `bool MainAutoDJ { get; set; }` (setter)
     fn set_main_autodj(&self, _value: bool) {}
-    /// `float32 get_MainTrackVolume()`
-    fn main_track_volume(&self) -> f32 {
-        0.0
-    }
-    /// `void set_MainTrackVolume(float32 'value')`
-    fn set_main_track_volume(&self, _value: f32) {}
-    /// `bool get_Pause()`
-    fn pause(&self) -> bool {
-        false
-    }
-    /// `void set_Pause(bool 'value')`
-    fn set_pause(&self, _value: bool) {}
 
-    // ---- main playlist ------------------------------------------------------
-
-    /// `List<TrackPlayer> get_MainPlaylist()` — playlist rows as SongData.
-    fn main_playlist(&self) -> Vec<SongData> {
-        Vec::new()
-    }
-    /// `void set_MainPlaylist(List<TrackPlayer> 'value')`
-    fn set_main_playlist(&self, playlist: &[SongData]) {
-        let _ = playlist;
-    }
-
-    // ---- playlist / playout control -----------------------------------------
-
-    /// `void Add2Playlist(int64 trackID, int PlaylistPosition = 0)`
-    fn add_to_playlist(&self, _track_id: i64, _position: i32) {}
-    /// `bool AddPlaylist(int64 PlaylistID, int32 PlaylistPosition)`
-    fn add_playlist(&self, _playlist_id: i64, _position: i32) -> bool {
-        false
-    }
-    /// `void DeleteFromPlaylist(int32 trackNumber)`
-    fn delete_from_playlist(&self, _track_number: i32) {}
-    /// `void PlayPlaylistTrack(int32 trackNumber, bool WithFade)`
-    fn play_playlist_track(&self, _track_number: i32, _with_fade: bool) {}
-    /// `void PlayCartByNumber(int32 cartNumber)`
-    fn play_cart_by_number(&self, _cart_number: i32) {}
-    /// `bool LoadRotationID(int64 rotationID)`
-    fn load_rotation_id(&self, _rotation_id: i64) -> bool {
-        false
-    }
-    /// `bool RunEvent(int64 eventID)`
-    fn run_event(&self, _event_id: i64) -> bool {
-        false
-    }
-
-    // ---- misc state get/set --------------------------------------------------
-
-    /// `bool get_MainAssisted()`
+    /// `bool MainAssisted { get; set; }`
     fn main_assisted(&self) -> bool {
         false
     }
-    /// `void set_MainAssisted(bool 'value')`
+    /// `bool MainAssisted { get; set; }` (setter)
     fn set_main_assisted(&self, _value: bool) {}
-    /// `bool get_PauseEvents()`
-    fn pause_events(&self) -> bool {
-        false
-    }
-    /// `void set_PauseEvents(bool 'value')`
-    fn set_pause_events(&self, _value: bool) {}
-    /// `bool get_Playlist2Full()`
-    fn playlist2_full_screen(&self) -> bool {
-        false
-    }
-    /// `void set_Playlist2Full(bool 'value')`
-    fn set_playlist2_full_screen(&self, _value: bool) {}
-    /// `bool get_Record()`
-    fn record(&self) -> bool {
-        false
-    }
-    /// `void set_Record(bool 'value')`
-    fn set_record(&self, _value: bool) {}
-    /// `bool get_TrackLoop()`
-    fn track_loop(&self) -> bool {
-        false
-    }
-    /// `void set_TrackLoop(bool 'value')`
-    fn set_track_loop(&self, _value: bool) {}
-    /// `bool get_UnmuteInput()`
+
+    /// `bool UnmuteInput { get; set; }`
     fn unmute_input(&self) -> bool {
         false
     }
-    /// `void set_UnmuteInput(bool 'value')`
+    /// `bool UnmuteInput { get; set; }` (setter)
     fn set_unmute_input(&self, _value: bool) {}
-    /// `int32 get_NowPlayingHandle()`
-    fn now_playing_handle(&self) -> i32 {
-        -1
+
+    /// `bool TrackLoop { get; set; }`
+    fn track_loop(&self) -> bool {
+        false
     }
-    /// `int32 get_QueueCount()`
-    fn queue_count(&self) -> i32 {
-        0
+    /// `bool TrackLoop { get; set; }` (setter)
+    fn set_track_loop(&self, _value: bool) {}
+
+    /// `bool Record { get; set; }`
+    fn record(&self) -> bool {
+        false
     }
-    /// `float64 get_RemainingTime()`
-    fn remaining_time(&self) -> f64 {
-        0.0
+    /// `bool Record { get; set; }` (setter)
+    fn set_record(&self, _value: bool) {}
+
+    /// `bool PauseEvents { get; set; }`
+    fn pause_events(&self) -> bool {
+        false
     }
-    /// `int32 get_SearchResults()`
+    /// `bool PauseEvents { get; set; }` (setter)
+    fn set_pause_events(&self, _value: bool) {}
+
+    /// `bool Playlist2FullScreen { get; set; }`
+    fn playlist2_full_screen(&self) -> bool {
+        false
+    }
+    /// `bool Playlist2FullScreen { get; set; }` (setter)
+    fn set_playlist2_full_screen(&self, _value: bool) {}
+
+    /// `int SearchResults { get; }`
     fn search_results(&self) -> i32 {
         0
     }
-    /// `string get_titleMain()`
+
+    /// `bool ReloadZones { set; }`
+    fn set_reload_zones(&self, _value: bool) {}
+
+    /// `string TitleMain { get; set; }`
     fn title_main(&self) -> String {
         String::new()
     }
-    /// `void set_titleMain(string 'value')`
+    /// `string TitleMain { get; set; }` (setter)
     fn set_title_main(&self, _value: &str) {}
-    /// `string get_ApplicationPath()`
-    fn application_path(&self) -> PathBuf {
-        PathBuf::new()
-    }
 
-    /// `int32[] get_GetSoundCard(SoundCard.CardTypes sc)` — card index list
-    /// for the given card type; raw i32 passthrough because the original
-    /// `CardTypes` enum members are not recoverable.
-    fn sound_cards(&self, _card_type: i32) -> Vec<i32> {
-        Vec::new()
-    }
-    /// `int32 get_GetTypeColor(int32 TrackType)` — OLE color for a song type.
-    fn get_type_color(&self, _track_type: i32) -> i32 {
-        0
-    }
-    /// `string get_GetTypeTitle(int32 TrackType)` — display title per type
-    /// (docs/03 §6 track-type registry).
+    /// Parameterized property: `string get_GetTypeTitle(int TrackType)`
     fn get_type_title(&self, _track_type: i32) -> String {
         String::new()
     }
 
-    // ---- command-style write-only properties (original `set_*` members) -----
-
-    /// `void set_CartStarted(int32 'value')`
-    fn set_cart_started(&self, _value: i32) {}
-    /// `void set_CartsChanged(bool 'value')`
-    fn set_carts_changed(&self, _value: bool) {}
-    /// `void set_ClearPlaylist(bool 'value')`
-    fn set_clear_playlist(&self, _value: bool) {}
-    /// `void set_MainPlayerStarted(int32 'value')`
-    fn set_main_player_started(&self, _value: i32) {}
-    /// `void set_PlayFromIntro(bool 'value')`
-    fn set_play_from_intro(&self, _value: bool) {}
-    /// `void set_PlayFromLoop(bool 'value')`
-    fn set_play_from_loop(&self, _value: bool) {}
-    /// `void set_PlayFromOutro(bool 'value')`
-    fn set_play_from_outro(&self, _value: bool) {}
-    /// `void set_RefreshEvents(bool 'value')`
-    fn set_refresh_events(&self, _value: bool) {}
-    /// `void set_RefreshGUI(bool 'value')`
-    fn set_refresh_gui(&self, _value: bool) {}
-    /// `void set_ReloadCategories(bool 'value')`
-    fn set_reload_categories(&self, _value: bool) {}
-    /// `void set_ReloadZones(bool 'value')`
-    fn set_reload_zones(&self, _value: bool) {}
-    /// `void set_RestartTrack(bool 'value')`
-    fn set_restart_track(&self, _value: bool) {}
-    /// `void set_StopPlaying(bool 'value')`
-    fn set_stop_playing(&self, _value: bool) {}
-    /// `void set_StopPlayingWithoutFade(bool 'value')`
-    fn set_stop_playing_without_fade(&self, _value: bool) {}
-    /// `void set_UpdatePlaylist(bool 'value')`
-    fn set_update_playlist(&self, _value: bool) {}
-
-    // ---- data access ----------------------------------------------------------
-
-    /// `string GetSetting(string sender, string Key, string defaultValue = "0")`
-    fn get_setting(&self, _sender: &str, _key: &str, _default: &str) -> String {
-        String::new()
-    }
-    /// `bool SaveSetting(string sender, string Key, string Value)`
-    fn save_setting(&self, _sender: &str, _key: &str, _value: &str) -> bool {
-        false
-    }
-    /// `int32 MysqlQuery(string query, ref DataSet ds)` — returns the JSON
-    /// encoding of the DataSet (tables → arrays of row objects) the caller
-    /// would have received through the `ref DataSet` out-param.
-    fn mysql_query(&self, _query: &str) -> String {
-        String::new()
-    }
-    /// `int32 MysqlInsert(string query)` — affected rows / autoincrement id.
-    fn mysql_insert(&self, _query: &str) -> i32 {
+    /// Parameterized property: `int get_GetTypeColor(int TrackType)`
+    fn get_type_color(&self, _track_type: i32) -> i32 {
         0
     }
-    /// `int32 GetSongs(string sqlFilter, ref DataGridView dgv)` — matching
-    /// rows as SongData (row count = Vec length).
-    fn get_songs(&self, _sql_filter: &str) -> Vec<SongData> {
+
+    /// Parameterized property: `int[] get_GetSoundCard(SoundCard.CardTypes sc)`
+    /// (`sc` is the `SoundCard.CardTypes` enum value as `i32`.)
+    fn get_sound_card(&self, _card_type: i32) -> Vec<i32> {
         Vec::new()
     }
-    /// `int64 ImportFile(string[] filePaths, bool fromURL, long subcatID = 0, long genreID = 0)`
-    /// — returns the new song id (0 on failure).
-    fn import_file(
-        &self,
-        _file_paths: &[PathBuf],
-        _from_url: bool,
-        _subcat_id: i64,
-        _genre_id: i64,
-    ) -> i64 {
+
+    // ---- main player ----------------------------------------------------------
+
+    /// `float MainVolume { get; set; }`
+    fn main_volume(&self) -> f32 {
+        0.0
+    }
+    /// `float MainVolume { get; set; }` (setter)
+    fn set_main_volume(&self, _value: f32) {}
+
+    /// `float MainTrackVolume { get; set; }`
+    fn main_track_volume(&self) -> f32 {
+        0.0
+    }
+    /// `float MainTrackVolume { get; set; }` (setter)
+    fn set_main_track_volume(&self, _value: f32) {}
+
+    /// `bool MainMute { get; set; }`
+    fn main_mute(&self) -> bool {
+        false
+    }
+    /// `bool MainMute { get; set; }` (setter)
+    fn set_main_mute(&self, _value: bool) {}
+
+    /// `bool PlayFromIntro { set; }`
+    fn set_play_from_intro(&self, _value: bool) {}
+
+    /// `bool PlayFromLoop { set; }`
+    fn set_play_from_loop(&self, _value: bool) {}
+
+    /// `bool PlayFromOutro { set; }`
+    fn set_play_from_outro(&self, _value: bool) {}
+
+    /// `bool RestartTrack { set; }`
+    fn set_restart_track(&self, _value: bool) {}
+
+    /// `bool Pause { get; set; }`
+    fn pause(&self) -> bool {
+        false
+    }
+    /// `bool Pause { get; set; }` (setter)
+    fn set_pause(&self, _value: bool) {}
+
+    /// `bool StopPlaying { set; }`
+    fn set_stop_playing(&self, _value: bool) {}
+
+    /// `bool StopPlayingWithoutFade { set; }`
+    fn set_stop_playing_without_fade(&self, _value: bool) {}
+
+    /// `bool UpdatePlaylist { set; }`
+    fn set_update_playlist(&self, _value: bool) {}
+
+    /// `List<TrackPlayer> MainPlaylist { get; set; }`
+    fn get_main_playlist(&self) -> Vec<SongData> {
+        Vec::new()
+    }
+    /// `List<TrackPlayer> MainPlaylist { get; set; }` (setter)
+    fn set_main_playlist(&self, _playlist: &[SongData]) {}
+
+    /// `bool ClearPlaylist { set; }`
+    fn set_clear_playlist(&self, _value: bool) {}
+
+    /// `int QueueCount { get; }`
+    fn queue_count(&self) -> i32 {
         0
     }
+
+    /// `int NowPlayingHandle { get; }`
+    fn now_playing_handle(&self) -> i32 {
+        0
+    }
+
+    /// `double RemainingTime { get; }`
+    fn remaining_time(&self) -> f64 {
+        0.0
+    }
+
+    // ---- reload/refresh commands ----------------------------------------------
+
+    /// `bool RefreshEvents { set; }`
+    fn set_refresh_events(&self, _value: bool) {}
+
+    /// `bool ReloadCategories { set; }`
+    fn set_reload_categories(&self, _value: bool) {}
+
+    /// `bool RefreshGUI { set; }`
+    fn set_refresh_gui(&self, _value: bool) {}
+
+    /// `bool CartsChanged { set; }`
+    fn set_carts_changed(&self, _value: bool) {}
+
+    /// `int CartStarted { set; }`
+    fn set_cart_started(&self, _value: i32) {}
+
+    /// `int MainPlayerStarted { set; }`
+    fn set_main_player_started(&self, _value: i32) {}
+
+    // ---- misc ------------------------------------------------------------------
+
+    /// `string ApplicationPath { get; }`
+    fn application_path(&self) -> PathBuf {
+        PathBuf::new()
+    }
+
+    /// `int GetSongs(string sql, ref DataGridView dgv)` — the matched rows;
+    /// the row count is the vec length.
+    fn get_songs(&self, _sql: &str) -> Vec<SongData> {
+        Vec::new()
+    }
+
+    /// `void StateChanged(Features Feature, object e)` — host-side state
+    /// broadcast (plugins may re-broadcast state through this).
+    fn state_changed(&self, _state: &StateInfo) {}
+
+    /// `bool RunEvent(long eventID)`
+    fn run_event(&self, _event_id: i64) -> bool {
+        false
+    }
+
+    // ---- playlist commands -------------------------------------------------------
+
+    /// `void PlayPlaylistTrack(int trackNumber, bool WithFade)`
+    fn play_playlist_track(&self, _track_number: i32, _with_fade: bool) {}
+
+    /// `void Add2Playlist(long trackID, int playlistPosition = 0)`
+    fn add_to_playlist_by_id(&self, _track_id: i64, _position: i32) {}
+
+    /// `void Add2Playlist(TrackPlayer trackData, int playlistPosition = 0)`
+    fn add_to_playlist(&self, _track: &SongData, _position: i32) {}
+
+    /// `void DeleteFromPlaylist(int trackNumber)`
+    fn delete_from_playlist(&self, _track_number: i32) {}
+
+    /// `bool AddPlaylist(long PlaylistID, int PlaylistPosition)`
+    fn add_playlist_by_id(&self, _playlist_id: i64, _position: i32) -> bool {
+        false
+    }
+
+    /// `bool AddPlaylist(string PlaylistPath, int PlaylistPosition)`
+    fn add_playlist_by_path(&self, _path: &str, _position: i32) -> bool {
+        false
+    }
+
+    /// `long ImportFile(...)` (three overloads, see [`ImportRequest`]).
+    fn import_file(&self, _request: &ImportRequest) -> i64 {
+        0
+    }
+
     /// `bool UpdateHistory(SongData Track)`
     fn update_history(&self, _track: &SongData) -> bool {
         false
     }
 
-    // ---- UI -------------------------------------------------------------------
+    // ---- UI requests ---------------------------------------------------------------
 
-    /// Queues one of the `Show*Window`/editor window requests for the host GUI.
+    /// `void ShowTracksWindow(...)` / `ShowTrackDetails(...)` /
+    /// `ShowTrackDetailsWindow(...)` / `ShowTrackEditor(...)` /
+    /// `ShowImportFolder()` / `ShowCategoriesEditor()` — all `Show*` members
+    /// funneled through one queued request.
     fn show_ui(&self, _request: PluginUiRequest) {}
 
-    // ---- plugin actions / diagnostics ------------------------------------------
+    // ---- plugin actions -------------------------------------------------------------
 
-    /// `List<EventAction> GetPluginActions()` — actions offered by host-side
-    /// feature plugins reachable through the host (mirrors plugin.actions()).
+    /// `List<Events.EventAction> GetPluginActions()`
     fn get_plugin_actions(&self) -> Vec<EventAction> {
         Vec::new()
     }
-    /// `void RunPluginAction(EventAction EventItem, string[] args = null)`
+
+    /// `void RunPluginAction(Events.EventAction EventItem, string[] args = null)`
     fn run_plugin_action(&self, _action: &EventAction, _args: &[String]) {}
-    /// `void DebugAddLine(string entry)` — append to host debug log.
-    fn debug_add_line(&self, entry: &str);
-    /// `void StateChanged(Features Feature, object e)` — plugin announces a
-    /// state change to the host for redistribution.
-    fn state_changed(&self, _state: &StateInfo) {}
+
+    /// `void PlayCartByNumber(int cartNumber)`
+    fn play_cart_by_number(&self, _cart_number: i32) {}
+
+    // ---- logging ---------------------------------------------------------------------
+
+    /// `void DebugAddLine(string entry)`
+    fn debug_add_line(&self, _entry: &str) {}
+
+    // ---- rotations ----------------------------------------------------------------------
+
+    /// `bool LoadRotationID(long rotationID)`
+    fn load_rotation_id(&self, _rotation_id: i64) -> bool {
+        false
+    }
+
+    // ---- database --------------------------------------------------------------------------
+
+    /// `int MysqlQuery(string query, ref DataSet ds)` — results as
+    /// JSON-encoded text of the DataSet (NULL/empty on failure).
+    fn mysql_query(&self, _sql: &str, _args: &[&str]) -> String {
+        String::new()
+    }
+
+    /// `int MysqlInsert(string query)` — affected rows.
+    fn mysql_insert(&self, _sql: &str, _args: &[&str]) -> i32 {
+        0
+    }
+
+    // ---- ini-style settings --------------------------------------------------------------------
+
+    /// `bool SaveSetting(string FileName, string Key, string Value)`
+    fn save_setting(&self, _file: &str, _key: &str, _value: &str) {}
+
+    /// `string GetSetting(string FileName, string Key, string defaultValue = "0")`
+    fn get_setting(&self, _file: &str, _key: &str, _default: &str) -> String {
+        String::new()
+    }
 }

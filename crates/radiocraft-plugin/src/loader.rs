@@ -91,13 +91,35 @@ pub unsafe fn load_plugin<P: AsRef<Path>>(path: P) -> Result<LoadedPlugin, Loade
     }
 
     // SAFETY: caller guarantees the vtable and its slots are valid and the
-    // returned instance satisfies Send + Sync.
-    let plugin = unsafe { NativePlugin::from_raw(vtable) };
+    // returned instance satisfies Send + Sync. We copy the vtable out of the
+    // plugin's heap allocation (`register` allocated it and leaks it; the
+    // `destroy` entry releases the instance, the table itself is leaked).
+    let plugin = unsafe { NativePlugin::new(std::ptr::read(vtable)) };
 
     Ok(LoadedPlugin {
         plugin: Box::new(plugin),
         _library: library,
     })
+}
+
+/// A loaded plugin also implements [`Plugin`], so the dynamic library stays
+/// alive for as long as the plugin is registered.
+impl<P: Plugin + ?Sized> Plugin for LoadedPlugin<P> {
+    fn info(&self) -> crate::plugin::PluginInfo {
+        self.plugin.info()
+    }
+    fn init(&mut self, host: &dyn crate::host::Host) {
+        self.plugin.init(host)
+    }
+    fn actions(&self) -> Vec<crate::host::EventAction> {
+        self.plugin.actions()
+    }
+    fn run_action(&mut self, action: &crate::host::EventAction, args: &[String]) {
+        self.plugin.run_action(action, args)
+    }
+    fn on_state_changed(&mut self, state: &crate::host::StateInfo) {
+        self.plugin.on_state_changed(state)
+    }
 }
 
 /// Registry of live plugins with an action-name dispatch index.
@@ -156,7 +178,7 @@ impl PluginRegistry {
             .map(|(_, p)| p)
     }
 
-    pub fn iter(&self) -> impl Iterator<Item = (u64, &(dyn Plugin))> {
+    pub fn iter(&self) -> impl Iterator<Item = (u64, &dyn Plugin)> {
         self.plugins.iter().map(|(id, p)| (*id, &**p))
     }
 
@@ -180,23 +202,23 @@ impl PluginRegistry {
     /// form) across all plugins that offer it.
     pub fn dispatch(&mut self, action: &str, args: &[String]) -> Result<usize, DispatchError> {
         let name = action.split_once(" (").map(|(n, _)| n).unwrap_or(action);
-        let matching: Vec<u64> = self
+        let matching: Vec<(u64, crate::host::EventAction)> = self
             .plugins
             .iter()
-            .filter(|(_, p)| {
-                p.actions().iter().any(|a| {
-                    a.name == name || a.to_display_string() == action
-                })
+            .flat_map(|(id, p)| {
+                p.actions()
+                    .into_iter()
+                    .filter(move |a| a.name == name || a.display_string() == action)
+                    .map(move |a| (*id, a))
             })
-            .map(|(id, _)| *id)
             .collect();
         if matching.is_empty() {
             return Err(DispatchError::UnknownAction(action.to_string()));
         }
         let mut count = 0;
-        for id in matching {
+        for (id, action) in matching {
             if let Some(p) = self.get_mut(id) {
-                p.run_action(action.to_string(), args);
+                p.run_action(&action, args);
                 count += 1;
             }
         }

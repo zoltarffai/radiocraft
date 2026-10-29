@@ -5,7 +5,6 @@
 //! transparently handles sample-format conversion and sample-rate differences
 //! via [`util::StreamResampler`].
 
-use std::io::BufReader;
 use std::path::Path;
 use std::time::Duration;
 
@@ -13,7 +12,9 @@ use symphonia::core::audio::SampleBuffer;
 use symphonia::core::codecs::{DecoderOptions, CODEC_TYPE_NULL};
 use symphonia::core::formats::{FormatOptions, FormatReader, SeekMode, SeekTo};
 use symphonia::core::io::MediaSourceStream;
+use symphonia::core::meta::MetadataOptions;
 use symphonia::core::probe::Hint;
+use symphonia::core::units::Time;
 
 use crate::error::{AudioError, Result};
 use crate::util::StreamResampler;
@@ -59,63 +60,71 @@ pub struct FileSource {
 impl FileSource {
     /// Open a media file.
     pub fn open(path: &Path) -> Result<Self> {
-        let file = std::fs::File::open(path).map_err(|e| AudioError::Io {
-            path: path.display().to_string(),
-            source: e,
+        let file = std::fs::File::open(path).map_err(|e| {
+            AudioError::Io(std::io::Error::new(
+                e.kind(),
+                format!("{}: {e}", path.display()),
+            ))
         })?;
-        let mss = MediaSourceStream::new(Box::new(BufReader::new(file)), Default::default());
-        let hint = Hint::new().with_path(path);
+        let mss = MediaSourceStream::new(Box::new(file), Default::default());
+        let ext = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(|e| e.to_ascii_lowercase())
+            .unwrap_or_default();
+        let mut hint = Hint::new();
+        if !ext.is_empty() {
+            hint.with_extension(&ext);
+        }
         let probe = symphonia::default::get_probe()
-            .format(&hint, mss, &FormatOptions::default(), Default::default())
-            .map_err(|e| AudioError::Decode {
-                path: path.display().to_string(),
-                message: e.to_string(),
-            })?;
+            .format(
+                &hint,
+                mss,
+                &FormatOptions::default(),
+                &MetadataOptions::default(),
+            )
+            .map_err(|e| AudioError::Decode(format!("{}: {e}", path.display())))?;
 
         let reader = probe.format;
         let track = reader
             .default_track()
-            .ok_or_else(|| AudioError::Unsupported {
-                kind: format!("{}: no audio track", path.display()),
-            })?;
-        let params = track.params.clone();
+            .ok_or_else(|| AudioError::Unsupported(format!("{}: no audio track", path.display())))?;
+        let params = track.codec_params.clone();
         let track_id = track.id;
 
-        if params.codec.is_none() || params.codec == Some(CODEC_TYPE_NULL) {
-            return Err(AudioError::Unsupported {
-                kind: format!("{}: unknown codec", path.display()),
-            });
+        if params.codec == CODEC_TYPE_NULL {
+            return Err(AudioError::Unsupported(format!(
+                "{}: unknown codec",
+                path.display()
+            )));
         }
 
         let decoder = symphonia::default::get_codecs()
-            .make(&params, &DecoderOptions { strict: false })
-            .map_err(|e| AudioError::Unsupported {
-                kind: format!("{}: {}", path.display(), e),
-            })?;
+            .make(&params, &DecoderOptions { verify: false })
+            .map_err(|e| AudioError::Unsupported(format!("{}: {e}", path.display())))?;
 
         let source_rate = params
             .sample_rate
-            .map(|r| r.get())
-            .unwrap_or(SAMPLE_RATE);
+            .unwrap_or(SAMPLE_RATE as u32);
 
         let duration = params.n_frames.zip(params.time_base).and_then(|(frames, tb)| {
             if frames == 0 || tb.denom == 0 {
                 None
             } else {
                 Duration::try_from_secs_f64(
-                    frames as f64 * f64::from(tb.value) / f64::from(tb.denom),
+                    frames as f64 * f64::from(tb.numer) / f64::from(tb.denom),
                 )
                 .ok()
             }
         });
 
-        let resampling = source_rate != SAMPLE_RATE;
+        let resampling = source_rate != SAMPLE_RATE as u32;
         Ok(FileSource {
             reader,
             decoder,
             track_id,
             duration,
-            resampler: StreamResampler::new(source_rate, SAMPLE_RATE, 2),
+            resampler: StreamResampler::new(source_rate as usize, SAMPLE_RATE, 2),
             resampling,
             flushed: false,
             scratch: Vec::new(),
@@ -144,7 +153,7 @@ impl FileSource {
                     return self.pump();
                 }
             };
-            if packet.track_id != self.track_id {
+            if packet.track_id() != self.track_id {
                 continue;
             }
             match self.decoder.decode(&packet) {
@@ -207,9 +216,9 @@ impl Source for FileSource {
 
     fn seek(&mut self, seconds: f64) -> Result<bool> {
         match self.reader.seek(
-            SeekMode::Exact,
+            SeekMode::Accurate,
             SeekTo::Time {
-                time: seconds,
+                time: Time::from(seconds),
                 track_id: Some(self.track_id),
             },
         ) {
@@ -222,9 +231,7 @@ impl Source for FileSource {
                 self.done = false;
                 Ok(false)
             }
-            Err(e) => Err(AudioError::Invalid {
-                message: format!("seek not supported: {e}"),
-            }),
+            Err(e) => Err(AudioError::Invalid(format!("seek not supported: {e}"))),
         }
     }
 }

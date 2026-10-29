@@ -1,373 +1,439 @@
-//! Host-side ABI wiring: turn an `&dyn Host` implementation into a `HostVtable`
-//! a plugin can call (the mirror of the plugin-side `HostBridge`).
+//! Host-side counterpart of the ABI: wraps an `&dyn Host` into a `HostVtable`
+//! so plugins (Rust or C) can call it through the function-pointer table.
 //!
-//! `user_data` is a heap `Box<&dyn Host>` (reborrowed from the handle). All wire
-//! functions assume that layout; the payload encoding matches [`crate::abi`].
+//! Every wire function is panic-fenced (`catch_unwind`) so host panics never
+//! cross the FFI boundary; decoding failures fall back to defaults, encoding
+//! failures return NULL.
 
 use std::ffi::{c_char, c_int, c_void};
+use std::panic::{catch_unwind, AssertUnwindSafe};
 
-use crate::abi::{read_cstr, to_cstr_ptr, to_json_ptr, HostVtable};
-use crate::host::{Host, PluginUiRequest};
+use crate::abi::{json_arg, to_cstr_ptr, to_json_ptr, HostVtable};
+use crate::host::{EventAction, Host, ImportRequest, PluginUiRequest, StateInfo};
 use radiocraft_core::model::SongData;
 
-/// Decode a wire JSON pointer (never NULL-checked by callers via json_or).
-fn decode<T: serde::de::DeserializeOwned>(ptr: *const c_char) -> Option<T> {
-    if ptr.is_null() {
-        return None;
+/// Owned handle that keeps the `&dyn Host` reference alive for the vtable's
+/// `user_data`. The reference is leaked (`Box::into_raw`) because the plugin
+/// may keep a copy of the vtable beyond this handle's lifetime (mirroring the
+/// original host, where `IHost` stays valid for the whole plugin lifetime).
+pub struct HostHandle {
+    user_data: *mut c_void,
+}
+
+impl HostHandle {
+    /// Build a handle around a host implementation.
+    pub fn new(host: &dyn Host) -> Self {
+        let boxed: Box<&dyn Host> = Box::new(host);
+        Self {
+            user_data: Box::into_raw(boxed) as *mut c_void,
+        }
     }
-    serde_json::from_str(crate::abi::read_cstr(ptr)).ok()
+
+    /// The complete function-pointer table for this host.
+    pub fn vtable(&self) -> HostVtable {
+        HostVtable {
+            user_data: self.user_data,
+            main_autodj: Some(wire_main_autodj),
+            set_main_autodj: Some(wire_set_main_autodj),
+            main_assisted: Some(wire_main_assisted),
+            set_main_assisted: Some(wire_set_main_assisted),
+            unmute_input: Some(wire_unmute_input),
+            set_unmute_input: Some(wire_set_unmute_input),
+            track_loop: Some(wire_track_loop),
+            set_track_loop: Some(wire_set_track_loop),
+            record: Some(wire_record),
+            set_record: Some(wire_set_record),
+            pause_events: Some(wire_pause_events),
+            set_pause_events: Some(wire_set_pause_events),
+            playlist2_full_screen: Some(wire_playlist2_full_screen),
+            set_playlist2_full_screen: Some(wire_set_playlist2_full_screen),
+            search_results: Some(wire_search_results),
+            set_reload_zones: Some(wire_set_reload_zones),
+            title_main: Some(wire_title_main),
+            set_title_main: Some(wire_set_title_main),
+            get_type_title: Some(wire_get_type_title),
+            get_type_color: Some(wire_get_type_color),
+            get_sound_card: Some(wire_get_sound_card),
+            main_volume: Some(wire_main_volume),
+            set_main_volume: Some(wire_set_main_volume),
+            main_track_volume: Some(wire_main_track_volume),
+            set_main_track_volume: Some(wire_set_main_track_volume),
+            main_mute: Some(wire_main_mute),
+            set_main_mute: Some(wire_set_main_mute),
+            set_play_from_intro: Some(wire_set_play_from_intro),
+            set_play_from_loop: Some(wire_set_play_from_loop),
+            set_play_from_outro: Some(wire_set_play_from_outro),
+            set_restart_track: Some(wire_set_restart_track),
+            pause: Some(wire_pause),
+            set_pause: Some(wire_set_pause),
+            set_stop_playing: Some(wire_set_stop_playing),
+            set_stop_playing_without_fade: Some(wire_set_stop_playing_without_fade),
+            set_update_playlist: Some(wire_set_update_playlist),
+            get_main_playlist: Some(wire_get_main_playlist),
+            set_main_playlist: Some(wire_set_main_playlist),
+            set_clear_playlist: Some(wire_set_clear_playlist),
+            queue_count: Some(wire_queue_count),
+            now_playing_handle: Some(wire_now_playing_handle),
+            remaining_time: Some(wire_remaining_time),
+            set_refresh_events: Some(wire_set_refresh_events),
+            set_reload_categories: Some(wire_set_reload_categories),
+            set_refresh_gui: Some(wire_set_refresh_gui),
+            set_carts_changed: Some(wire_set_carts_changed),
+            set_cart_started: Some(wire_set_cart_started),
+            set_main_player_started: Some(wire_set_main_player_started),
+            application_path: Some(wire_application_path),
+            get_songs: Some(wire_get_songs),
+            state_changed: Some(wire_state_changed),
+            run_event: Some(wire_run_event),
+            play_playlist_track: Some(wire_play_playlist_track),
+            add_to_playlist_by_id: Some(wire_add_to_playlist_by_id),
+            add_to_playlist: Some(wire_add_to_playlist),
+            delete_from_playlist: Some(wire_delete_from_playlist),
+            add_playlist_by_id: Some(wire_add_playlist_by_id),
+            add_playlist_by_path: Some(wire_add_playlist_by_path),
+            import_file: Some(wire_import_file),
+            update_history: Some(wire_update_history),
+            show_ui: Some(wire_show_ui),
+            get_plugin_actions: Some(wire_get_plugin_actions),
+            run_plugin_action: Some(wire_run_plugin_action),
+            play_cart_by_number: Some(wire_play_cart_by_number),
+            debug_add_line: Some(wire_debug_add_line),
+            load_rotation_id: Some(wire_load_rotation_id),
+            mysql_query: Some(wire_mysql_query),
+            mysql_insert: Some(wire_mysql_insert),
+            save_setting: Some(wire_save_setting),
+            get_setting: Some(wire_get_setting),
+        }
+    }
 }
 
-/// Wire `user_data` back into a `&dyn Host`.
+// ---- wire helpers ----------------------------------------------------------
+
+/// Recover the `&dyn Host` stored by `HostHandle::new`.
 ///
-/// # Safety: `user` must be a live `Box<&dyn Host>` raw pointer.
+/// # Safety
+/// `user` must be a `user_data` produced by [`HostHandle::new`].
 unsafe fn host<'a>(user: *mut c_void) -> &'a dyn Host {
-    unsafe { &**(user as *mut &dyn Host) }
+    unsafe { &**(user as *const &dyn Host) }
 }
 
-macro_rules! wire_void0 {
-    ($name:ident, $method:ident) => {
-        unsafe extern "C" fn $name(user: *mut c_void) {
-            unsafe { host(user) }. $method();
-        }
-    };
+/// Run a host call, fencing panics: on panic return `fallback`.
+fn fence<T: Copy, F: FnOnce() -> T>(f: F, fallback: T) -> T {
+    match catch_unwind(AssertUnwindSafe(f)) {
+        Ok(v) => v,
+        Err(_) => fallback,
+    }
 }
-macro_rules! wire_void_str {
-    ($name:ident, $method:ident) => {
-        unsafe extern "C" fn $name(user: *mut c_void, s: *const c_char) {
-            unsafe { host(user) }. $method(unsafe { read_cstr(s) });
-        }
-    };
-}
-macro_rules! wire_set_str {
-    ($name:ident, $method:ident) => {
-        unsafe extern "C" fn $name(user: *mut c_void, s: *const c_char) {
-            unsafe { host(user) }. $method(unsafe { read_cstr(s) });
-        }
-    };
-}
-macro_rules! wire_get_str {
-    ($name:ident, $method:ident) => {
-        unsafe extern "C" fn $name(user: *mut c_void, out: *mut *mut c_char) {
-            if out.is_null() {
-                return;
-            }
-            let value = unsafe { host(user) }. $method();
-            unsafe { *out = to_cstr_ptr(&value) };
-        }
-    };
-}
+
 macro_rules! wire_get_bool {
     ($name:ident, $method:ident) => {
-        unsafe extern "C" fn $name(user: *mut c_void) -> c_int {
-            c_int::from(unsafe { host(user) }. $method())
+        pub unsafe extern "C" fn $name(user: *mut c_void) -> c_int {
+            fence(|| unsafe { host(user).$method() }, false).into()
         }
     };
 }
-macro_rules! wire_set_bool_as_i32 {
+macro_rules! wire_set_bool {
     ($name:ident, $method:ident) => {
-        unsafe extern "C" fn $name(user: *mut c_void, v: c_int) {
-            unsafe { host(user) }. $method(v != 0);
-        }
-    };
-}
-macro_rules! wire_set_i32 {
-    ($name:ident, $method:ident) => {
-        unsafe extern "C" fn $name(user: *mut c_void, v: c_int) {
-            unsafe { host(user) }. $method(v);
+        pub unsafe extern "C" fn $name(user: *mut c_void, v: c_int) {
+            let _ = catch_unwind(AssertUnwindSafe(|| unsafe {
+                host(user).$method(v != 0)
+            }));
         }
     };
 }
 macro_rules! wire_get_i32 {
     ($name:ident, $method:ident) => {
-        unsafe extern "C" fn $name(user: *mut c_void) -> c_int {
-            unsafe { host(user) }. $method()
+        pub unsafe extern "C" fn $name(user: *mut c_void) -> c_int {
+            fence(|| unsafe { host(user).$method() }, 0)
         }
     };
 }
-macro_rules! wire_get_i64 {
+macro_rules! wire_set_i32 {
     ($name:ident, $method:ident) => {
-        unsafe extern "C" fn $name(user: *mut c_void) -> i64 {
-            unsafe { host(user) }. $method()
+        pub unsafe extern "C" fn $name(user: *mut c_void, v: c_int) {
+            let _ = catch_unwind(AssertUnwindSafe(|| unsafe {
+                host(user).$method(v)
+            }));
         }
     };
 }
-macro_rules! wire_set_i64 {
+macro_rules! wire_get_f32 {
     ($name:ident, $method:ident) => {
-        unsafe extern "C" fn $name(user: *mut c_void, v: i64) {
-            unsafe { host(user) }. $method(v);
+        pub unsafe extern "C" fn $name(user: *mut c_void) -> f32 {
+            fence(|| unsafe { host(user).$method() }, 0.0)
         }
     };
 }
 macro_rules! wire_set_f32 {
     ($name:ident, $method:ident) => {
-        unsafe extern "C" fn $name(user: *mut c_void, v: f32) {
-            unsafe { host(user) }. $method(v);
+        pub unsafe extern "C" fn $name(user: *mut c_void, v: f32) {
+            let _ = catch_unwind(AssertUnwindSafe(|| unsafe {
+                host(user).$method(v)
+            }));
+        }
+    };
+}
+macro_rules! wire_get_f64 {
+    ($name:ident, $method:ident) => {
+        pub unsafe extern "C" fn $name(user: *mut c_void) -> f64 {
+            fence(|| unsafe { host(user).$method() }, 0.0)
+        }
+    };
+}
+macro_rules! wire_get_str {
+    ($name:ident, $method:ident) => {
+        pub unsafe extern "C" fn $name(user: *mut c_void, out: *mut *mut c_char) {
+            if out.is_null() {
+                return;
+            }
+            unsafe { *out = std::ptr::null_mut() };
+            let s = catch_unwind(AssertUnwindSafe(|| unsafe { host(user).$method() }))
+                .unwrap_or_default();
+            unsafe { *out = to_cstr_ptr(&s) };
+        }
+    };
+}
+macro_rules! wire_set_str {
+    ($name:ident, $method:ident) => {
+        pub unsafe extern "C" fn $name(user: *mut c_void, s: *const c_char) {
+            let s = crate::abi::read_cstr(s);
+            let _ = catch_unwind(AssertUnwindSafe(|| unsafe {
+                host(user).$method(s)
+            }));
+        }
+    };
+}
+macro_rules! wire_get_json {
+    ($name:ident, $method:ident) => {
+        pub unsafe extern "C" fn $name(user: *mut c_void) -> *mut c_char {
+            let v = catch_unwind(AssertUnwindSafe(|| unsafe { host(user).$method() }))
+                .unwrap_or_default();
+            to_json_ptr(&v)
         }
     };
 }
 
-wire_void0!(w_player_start, player_start);
-wire_void0!(w_player_pause, player_pause);
-wire_void0!(w_player_stop, player_stop);
-wire_void0!(w_player_resume, player_resume);
-wire_get_bool!(w_player_get_is_paused, player_get_is_paused);
-wire_set_bool_as_i32!(w_player_set_is_paused, player_set_is_paused);
-wire_get_bool!(w_player_is_stopped, player_is_stopped);
-wire_get_str!(w_player_get_track, player_get_track);
-wire_set_str!(w_player_set_track, player_set_track);
-wire_set_i32!(w_player_set_seek, player_set_seek);
-wire_get_i32!(w_player_get_seek, player_get_seek);
-wire_set_i32!(w_player_set_volume, player_set_volume);
-wire_get_i32!(w_player_get_volume, player_get_volume);
-wire_get_str!(w_rotals_get_rot, rotals_get_rot);
-wire_set_str!(w_rotals_set_rot, rotals_set_rot);
-wire_void0!(w_tracks_clear, tracks_clear);
-wire_set_bool_as_i32!(w_tracks_set_auto_rot, tracks_set_auto_rot);
-wire_set_str!(w_core_enable_shutdown, core_enable_shutdown);
-wire_void0!(w_core_disable_shutdown, core_disable_shutdown);
-wire_void0!(w_core_cancel_shutdown, core_cancel_shutdown);
-wire_get_bool!(w_web_is_enabled, web_is_enabled);
-wire_void0!(w_web_start, web_start);
-wire_void0!(w_web_stop, web_stop);
-wire_void0!(w_web_restart, web_restart);
-wire_void_str!(w_web_add_stream, web_add_stream);
-wire_void_str!(w_web_remove_stream, web_remove_stream);
-wire_void_str!(w_debug_add_line, debug_add_line);
-wire_void0!(w_interop_hide_main_form, interop_hide_main_form);
-wire_void0!(w_interop_unhide_main_form, interop_unhide_main_form);
-wire_get_bool!(w_interop_is_hidden, interop_is_hidden);
-wire_set_str!(w_interop_open_connection_string, interop_open_connection_string);
-wire_void_str!(w_media_open, media_open);
-wire_void0!(w_media_close, media_close);
-wire_get_bool!(w_media_get_playing, media_get_playing);
-wire_set_i32!(w_media_set_volume, media_set_volume);
-wire_set_bool_as_i32!(w_media_set_mute, media_set_mute);
-wire_get_bool!(w_media_get_mute, media_get_mute);
-wire_set_i32!(w_media_set_pan, media_set_pan);
-wire_get_i32!(w_media_get_pan, media_get_pan);
-wire_get_i64!(w_media_get_length, media_get_length);
-wire_get_i64!(w_media_get_position, media_get_position);
-wire_set_i64!(w_media_set_position, media_set_position);
-wire_void0!(w_media_play, media_play);
-wire_void0!(w_media_pause, media_pause);
-wire_void0!(w_media_stop, media_stop);
-wire_void_str!(w_capi_set_message, capi_set_message);
-wire_set_bool_as_i32!(w_engine_set_transition, engine_set_transition);
-wire_set_bool_as_i32!(w_engine_set_paused, engine_set_paused);
-wire_get_bool!(w_engine_get_paused, engine_get_paused);
-wire_get_bool!(w_webcaster_get_is_connected, webcaster_get_is_connected);
-wire_get_i64!(w_webcaster_get_dnc_count, webcaster_get_dnc_count);
-wire_get_i64!(w_webcaster_get_stream_uptime, webcaster_get_stream_uptime);
-wire_get_i64!(w_webcaster_get_global_uptime, webcaster_get_global_uptime);
-wire_get_i32!(w_webcaster_listener_get_count, webcaster_listener_get_count);
-wire_get_str!(w_get_startup, get_startup);
-wire_get_str!(w_get_version, get_version);
-wire_void0!(w_restart, restart);
-wire_set_i32!(w_vuscope_add_to_vuscope, vuscope_add_to_vuscope);
-wire_set_i32!(w_vuscope_remove_from_vuscope, vuscope_remove_from_vuscope);
-wire_set_f32!(w_vuscope_set_peak_left, vuscope_set_peak_left);
-wire_set_f32!(w_vuscope_set_peak_right, vuscope_set_peak_right);
-wire_set_bool_as_i32!(w_vuscope_set_playing, vuscope_set_playing);
-wire_set_bool_as_i32!(w_vuscope_set_scrolling, vuscope_set_scrolling);
-wire_set_bool_as_i32!(w_vuscope_set_scrolling2, vuscope_set_scrolling2);
-wire_void_str!(w_vuscope_set_clip, vuscope_set_clip);
-wire_set_f32!(w_vuscope_set_level_left, vuscope_set_level_left);
-wire_set_f32!(w_vuscope_set_level_right, vuscope_set_level_right);
-wire_get_i32!(w_sound_cards_get_count, sound_cards_get_count);
+wire_get_bool!(wire_main_autodj, main_autodj);
+wire_set_bool!(wire_set_main_autodj, set_main_autodj);
+wire_get_bool!(wire_main_assisted, main_assisted);
+wire_set_bool!(wire_set_main_assisted, set_main_assisted);
+wire_get_bool!(wire_unmute_input, unmute_input);
+wire_set_bool!(wire_set_unmute_input, set_unmute_input);
+wire_get_bool!(wire_track_loop, track_loop);
+wire_set_bool!(wire_set_track_loop, set_track_loop);
+wire_get_bool!(wire_record, record);
+wire_set_bool!(wire_set_record, set_record);
+wire_get_bool!(wire_pause_events, pause_events);
+wire_set_bool!(wire_set_pause_events, set_pause_events);
+wire_get_bool!(wire_playlist2_full_screen, playlist2_full_screen);
+wire_set_bool!(wire_set_playlist2_full_screen, set_playlist2_full_screen);
+wire_get_i32!(wire_search_results, search_results);
+wire_set_bool!(wire_set_reload_zones, set_reload_zones);
+wire_get_str!(wire_title_main, title_main);
+wire_set_str!(wire_set_title_main, set_title_main);
 
-// Engine transition getter returns bool but vtable slot is FnGetI32.
-unsafe extern "C" fn w_engine_get_transition(user: *mut c_void) -> c_int {
-    c_int::from(unsafe { host(user) }.engine_get_transition())
+pub unsafe extern "C" fn wire_get_type_title(user: *mut c_void, t: c_int) -> *mut c_char {
+    let v = catch_unwind(AssertUnwindSafe(|| unsafe { host(user).get_type_title(t) }))
+        .unwrap_or_default();
+    to_json_ptr(&v)
+}
+pub unsafe extern "C" fn wire_get_type_color(user: *mut c_void, t: c_int) -> c_int {
+    fence(|| unsafe { host(user).get_type_color(t) }, 0)
+}
+pub unsafe extern "C" fn wire_get_sound_card(user: *mut c_void, t: c_int) -> *mut c_char {
+    let v = catch_unwind(AssertUnwindSafe(|| unsafe { host(user).get_sound_card(t) }))
+        .unwrap_or_default();
+    to_json_ptr(&v)
 }
 
-// JSON/struct-bearing entries.
-unsafe extern "C" fn w_tracks_add(user: *mut c_void, json: *const c_char) {
-    if let Some(song) = decode::<SongData>(json) {
-        unsafe { host(user) }.tracks_add(&song);
+wire_get_f32!(wire_main_volume, main_volume);
+wire_set_f32!(wire_set_main_volume, set_main_volume);
+wire_get_f32!(wire_main_track_volume, main_track_volume);
+wire_set_f32!(wire_set_main_track_volume, set_main_track_volume);
+wire_get_bool!(wire_main_mute, main_mute);
+wire_set_bool!(wire_set_main_mute, set_main_mute);
+wire_set_bool!(wire_set_play_from_intro, set_play_from_intro);
+wire_set_bool!(wire_set_play_from_loop, set_play_from_loop);
+wire_set_bool!(wire_set_play_from_outro, set_play_from_outro);
+wire_set_bool!(wire_set_restart_track, set_restart_track);
+wire_get_bool!(wire_pause, pause);
+wire_set_bool!(wire_set_pause, set_pause);
+wire_set_bool!(wire_set_stop_playing, set_stop_playing);
+wire_set_bool!(wire_set_stop_playing_without_fade, set_stop_playing_without_fade);
+wire_set_bool!(wire_set_update_playlist, set_update_playlist);
+wire_get_json!(wire_get_main_playlist, get_main_playlist);
+
+pub unsafe extern "C" fn wire_set_main_playlist(user: *mut c_void, json: *const c_char) {
+    let v = json_arg::<Vec<SongData>>(json);
+    let _ = catch_unwind(AssertUnwindSafe(|| unsafe {
+        host(user).set_main_playlist(&v)
+    }));
+}
+wire_set_bool!(wire_set_clear_playlist, set_clear_playlist);
+wire_get_i32!(wire_queue_count, queue_count);
+wire_get_i32!(wire_now_playing_handle, now_playing_handle);
+wire_get_f64!(wire_remaining_time, remaining_time);
+
+wire_set_bool!(wire_set_refresh_events, set_refresh_events);
+wire_set_bool!(wire_set_reload_categories, set_reload_categories);
+wire_set_bool!(wire_set_refresh_gui, set_refresh_gui);
+wire_set_bool!(wire_set_carts_changed, set_carts_changed);
+wire_set_i32!(wire_set_cart_started, set_cart_started);
+wire_set_i32!(wire_set_main_player_started, set_main_player_started);
+
+pub unsafe extern "C" fn wire_application_path(user: *mut c_void, out: *mut *mut c_char) {
+    if out.is_null() {
+        return;
     }
+    unsafe { *out = std::ptr::null_mut() };
+    let p = catch_unwind(AssertUnwindSafe(|| unsafe { host(user).application_path() }))
+        .unwrap_or_default();
+    let s = p.to_string_lossy().into_owned();
+    unsafe { *out = to_cstr_ptr(&s) };
 }
-unsafe extern "C" fn w_interop_show_plugin_window(user: *mut c_void, json: *const c_char) {
-    if let Some(req) = decode::<PluginUiRequest>(json) {
-        unsafe { host(user) }.interop_show_plugin_window(&req);
-    }
+
+pub unsafe extern "C" fn wire_get_songs(user: *mut c_void, sql: *const c_char) -> *mut c_char {
+    let sql = crate::abi::read_cstr(sql);
+    let v = catch_unwind(AssertUnwindSafe(|| unsafe { host(user).get_songs(sql) }))
+        .unwrap_or_default();
+    to_json_ptr(&v)
 }
-unsafe extern "C" fn w_interop_hide_plugin_window(user: *mut c_void, name: *const c_char) {
-    unsafe { host(user) }.interop_hide_plugin_window(unsafe { read_cstr(name) });
+
+pub unsafe extern "C" fn wire_state_changed(user: *mut c_void, json: *const c_char) {
+    let v = json_arg::<StateInfo>(json);
+    let _ = catch_unwind(AssertUnwindSafe(|| unsafe {
+        host(user).state_changed(&v)
+    }));
 }
-unsafe extern "C" fn w_config_set_setting(user: *mut c_void, catalog: *const c_char, setting: *const c_char) {
-    unsafe { host(user) }.config_set_setting(unsafe { read_cstr(catalog) }, unsafe { read_cstr(setting) });
+pub unsafe extern "C" fn wire_run_event(user: *mut c_void, id: i64) -> c_int {
+    fence(|| unsafe { host(user).run_event(id) }, false).into()
 }
-unsafe extern "C" fn w_config_get_setting(
+
+pub unsafe extern "C" fn wire_play_playlist_track(user: *mut c_void, n: c_int, fade: c_int) {
+    let _ = catch_unwind(AssertUnwindSafe(|| unsafe {
+        host(user).play_playlist_track(n, fade != 0)
+    }));
+}
+pub unsafe extern "C" fn wire_add_to_playlist_by_id(user: *mut c_void, id: i64, pos: c_int) {
+    let _ = catch_unwind(AssertUnwindSafe(|| unsafe {
+        host(user).add_to_playlist_by_id(id, pos)
+    }));
+}
+pub unsafe extern "C" fn wire_add_to_playlist(user: *mut c_void, json: *const c_char, pos: c_int) {
+    let v = json_arg::<SongData>(json);
+    let _ = catch_unwind(AssertUnwindSafe(|| unsafe {
+        host(user).add_to_playlist(&v, pos)
+    }));
+}
+wire_set_i32!(wire_delete_from_playlist, delete_from_playlist);
+pub unsafe extern "C" fn wire_add_playlist_by_id(user: *mut c_void, id: i64, pos: c_int) -> c_int {
+    fence(|| unsafe { host(user).add_playlist_by_id(id, pos) }, false).into()
+}
+pub unsafe extern "C" fn wire_add_playlist_by_path(
     user: *mut c_void,
-    catalog: *const c_char,
-    setting: *const c_char,
+    path: *const c_char,
+    pos: c_int,
+) -> c_int {
+    let path = crate::abi::read_cstr(path);
+    fence(|| unsafe { host(user).add_playlist_by_path(path, pos) }, false).into()
+}
+pub unsafe extern "C" fn wire_import_file(user: *mut c_void, json: *const c_char) -> i64 {
+    let req = json_arg::<ImportRequest>(json);
+    fence(|| unsafe { host(user).import_file(&req) }, 0)
+}
+pub unsafe extern "C" fn wire_update_history(user: *mut c_void, json: *const c_char) -> c_int {
+    let track = json_arg::<SongData>(json);
+    fence(|| unsafe { host(user).update_history(&track) }, false).into()
+}
+
+pub unsafe extern "C" fn wire_show_ui(user: *mut c_void, json: *const c_char) {
+    let req = json_arg::<PluginUiRequest>(json);
+    let _ = catch_unwind(AssertUnwindSafe(|| unsafe {
+        host(user).show_ui(req)
+    }));
+}
+
+pub unsafe extern "C" fn wire_get_plugin_actions(user: *mut c_void) -> *mut c_char {
+    let v = catch_unwind(AssertUnwindSafe(|| unsafe { host(user).get_plugin_actions() }))
+        .unwrap_or_default();
+    to_json_ptr(&v)
+}
+pub unsafe extern "C" fn wire_run_plugin_action(
+    user: *mut c_void,
+    action_json: *const c_char,
+    args_json: *const c_char,
+) {
+    let action = json_arg::<EventAction>(action_json);
+    let args = json_arg::<Vec<String>>(args_json);
+    let _ = catch_unwind(AssertUnwindSafe(|| unsafe {
+        host(user).run_plugin_action(&action, &args)
+    }));
+}
+wire_set_i32!(wire_play_cart_by_number, play_cart_by_number);
+wire_set_str!(wire_debug_add_line, debug_add_line);
+
+pub unsafe extern "C" fn wire_load_rotation_id(user: *mut c_void, id: i64) -> c_int {
+    fence(|| unsafe { host(user).load_rotation_id(id) }, false).into()
+}
+
+pub unsafe extern "C" fn wire_mysql_query(
+    user: *mut c_void,
+    sql: *const c_char,
+    args_json: *const c_char,
+) -> *mut c_char {
+    let sql = crate::abi::read_cstr(sql);
+    let args = json_arg::<Vec<String>>(args_json);
+    let refs: Vec<&str> = args.iter().map(String::as_str).collect();
+    let out = catch_unwind(AssertUnwindSafe(|| unsafe { host(user).mysql_query(sql, &refs) }))
+        .unwrap_or_default();
+    to_cstr_ptr(&out)
+}
+pub unsafe extern "C" fn wire_mysql_insert(
+    user: *mut c_void,
+    sql: *const c_char,
+    args_json: *const c_char,
+) -> c_int {
+    let sql = crate::abi::read_cstr(sql);
+    let args = json_arg::<Vec<String>>(args_json);
+    let refs: Vec<&str> = args.iter().map(String::as_str).collect();
+    fence(|| unsafe { host(user).mysql_insert(sql, &refs) }, 0)
+}
+
+pub unsafe extern "C" fn wire_save_setting(
+    user: *mut c_void,
+    file: *const c_char,
+    key: *const c_char,
+    value: *const c_char,
+) {
+    let (file, key, value) = (
+        crate::abi::read_cstr(file),
+        crate::abi::read_cstr(key),
+        crate::abi::read_cstr(value),
+    );
+    let _ = catch_unwind(AssertUnwindSafe(|| unsafe {
+        host(user).save_setting(file, key, value)
+    }));
+}
+pub unsafe extern "C" fn wire_get_setting(
+    user: *mut c_void,
+    file: *const c_char,
+    key: *const c_char,
+    default: *const c_char,
     out: *mut *mut c_char,
 ) {
     if out.is_null() {
         return;
     }
-    let value = unsafe { host(user) }.config_get_setting(unsafe { read_cstr(catalog) }, unsafe { read_cstr(setting) });
-    unsafe { *out = to_cstr_ptr(&value) };
-}
-/// Wire payload for mysql_query / mysql_insert: JSON array `[sql, [args...]]`.
-fn decode_query(json: *const c_char) -> Option<(String, Vec<String>)> {
-    decode::<(String, Vec<String>)>(json).map(|(sql, args)| (sql, args))
-}
-unsafe extern "C" fn w_mysql_query(user: *mut c_void, json: *const c_char) -> *mut c_char {
-    if let Some((sql, args)) = decode_query(json) {
-        let result = unsafe { host(user) }.mysql_query(&sql, &args.iter().map(String::as_str).collect::<Vec<_>>());
-        return to_cstr_ptr(&result);
-    }
-    std::ptr::null_mut()
-}
-unsafe extern "C" fn w_mysql_insert(user: *mut c_void, json: *const c_char) -> c_int {
-    if let Some((sql, args)) = decode_query(json) {
-        return unsafe { host(user) }.mysql_insert(&sql, &args.iter().map(String::as_str).collect::<Vec<_>>());
-    }
-    0
-}
-unsafe extern "C" fn w_get_songs(user: *mut c_void, json: *const c_char) -> *mut c_char {
-    if let Some(sql) = decode::<String>(json) {
-        let rows = unsafe { host(user) }.get_songs(&sql);
-        return to_json_ptr(&rows);
-    }
-    std::ptr::null_mut()
-}
-unsafe extern "C" fn w_engine_get_state(user: *mut c_void) -> *mut c_char {
-    to_json_ptr(&unsafe { host(user) }.engine_get_state())
-}
-unsafe extern "C" fn w_webcaster_listener_get_listener(user: *mut c_void, json: *const c_char) -> *mut c_char {
-    if let Some(index) = decode::<i32>(json) {
-        return to_json_ptr(&unsafe { host(user) }.webcaster_listener_get_listener(index));
-    }
-    std::ptr::null_mut()
-}
-unsafe extern "C" fn w_webcaster_listener_get_listeners(user: *mut c_void) -> *mut c_char {
-    to_json_ptr(&unsafe { host(user) }.webcaster_listener_get_listeners())
-}
-unsafe extern "C" fn w_set_startup(user: *mut c_void, program: *const c_char, flag: *const c_char) {
-    let enable = unsafe { read_cstr(flag) } == "true";
-    unsafe { host(user) }.set_startup(unsafe { read_cstr(program) }, enable);
-}
-unsafe extern "C" fn w_sound_cards_get_get_sound_card(user: *mut c_void, json: *const c_char) -> *mut c_char {
-    if let Some(card_type) = decode::<i32>(json) {
-        return to_json_ptr(&unsafe { host(user) }.get_get_sound_card(card_type));
-    }
-    std::ptr::null_mut()
+    unsafe { *out = std::ptr::null_mut() };
+    let (file, key, default) = (
+        crate::abi::read_cstr(file),
+        crate::abi::read_cstr(key),
+        crate::abi::read_cstr(default),
+    );
+    let v = catch_unwind(AssertUnwindSafe(|| unsafe {
+        host(user).get_setting(file, key, default)
+    }))
+    .unwrap_or_default();
+    unsafe { *out = to_cstr_ptr(&v) };
 }
 
-/// Owns the boxed `&dyn Host` carried as `user_data` and hands out a `HostVtable`
-/// wired to that host. The handle must outlive any vtable copies it produces.
-pub struct HostHandle<'a> {
-    user: *mut c_void,
-    _host: Box<&'a (dyn Host + 'static)>,
-}
-
-impl<'a> HostHandle<'a> {
-    /// Wrap a live host implementation for ABI use.
-    pub fn new(host: &'a dyn Host) -> Self {
-        let host_ref: &'a dyn Host = host;
-        let b = Box::new(host_ref);
-        let user = Box::into_raw(b) as *mut c_void;
-        Self {
-            user,
-            _host: unsafe { Box::from_raw(user as *mut &dyn Host) },
-        }
-    }
-
-    /// Build a fresh `HostVtable` bound to this host. `user_data` stays owned by
-    /// the handle (reborrowed); all entries are wired.
-    pub fn vtable(&self) -> HostVtable {
-        use crate::abi::{FnConfigGet, FnGetF32, FnGetI32, FnGetI64, FnGetJson, FnGetStr, FnJsonToI32, FnJsonToStr, FnSetF32, FnSetI32, FnSetI64, FnUiReq, FnVoidStr, FnVoidStrStr, FnVoidUnit};
-        HostVtable {
-            user_data: self.user,
-            player_start: Some(w_player_start as FnVoidUnit),
-            player_pause: Some(w_player_pause as FnVoidUnit),
-            player_stop: Some(w_player_stop as FnVoidUnit),
-            player_resume: Some(w_player_resume as FnVoidUnit),
-            player_get_is_paused: Some(w_player_get_is_paused as FnGetI32),
-            player_set_is_paused: Some(w_player_set_is_paused as FnSetI32),
-            player_is_stopped: Some(w_player_is_stopped as FnGetI32),
-            player_get_track: Some(w_player_get_track as FnGetStr),
-            player_set_track: Some(w_player_set_track as FnSetStr_),
-            player_set_seek: Some(w_player_set_seek as FnSetI32),
-            player_get_seek: Some(w_player_get_seek as FnGetI32),
-            player_set_volume: Some(w_player_set_volume as FnSetI32),
-            player_get_volume: Some(w_player_get_volume as FnGetI32),
-            rotals_get_rot: Some(w_rotals_get_rot as FnGetStr),
-            rotals_set_rot: Some(w_rotals_set_rot as FnSetStr_),
-            tracks_add: Some(w_tracks_add as FnVoidStr),
-            tracks_clear: Some(w_tracks_clear as FnVoidUnit),
-            tracks_set_auto_rot: Some(w_tracks_set_auto_rot as FnSetI32),
-            core_enable_shutdown: Some(w_core_enable_shutdown as FnSetStr_),
-            core_disable_shutdown: Some(w_core_disable_shutdown as FnVoidUnit),
-            core_cancel_shutdown: Some(w_core_cancel_shutdown as FnVoidUnit),
-            web_is_enabled: Some(w_web_is_enabled as FnGetI32),
-            web_start: Some(w_web_start as FnVoidUnit),
-            web_stop: Some(w_web_stop as FnVoidUnit),
-            web_restart: Some(w_web_restart as FnVoidUnit),
-            web_add_stream: Some(w_web_add_stream as FnVoidStr),
-            web_remove_stream: Some(w_web_remove_stream as FnVoidStr),
-            debug_add_line: Some(w_debug_add_line as FnVoidStr),
-            interop_hide_main_form: Some(w_interop_hide_main_form as FnVoidUnit),
-            interop_unhide_main_form: Some(w_interop_unhide_main_form as FnVoidUnit),
-            interop_is_hidden: Some(w_interop_is_hidden as FnGetI32),
-            interop_show_plugin_window: Some(w_interop_show_plugin_window as FnUiReq),
-            interop_hide_plugin_window: Some(w_interop_hide_plugin_window as FnVoidStr),
-            interop_open_connection_string: Some(w_interop_open_connection_string as FnSetStr_),
-            config_get_setting: Some(w_config_get_setting as FnConfigGet),
-            config_set_setting: Some(w_config_set_setting as FnVoidStrStr),
-            mysql_query: Some(w_mysql_query as FnJsonToStr),
-            mysql_insert: Some(w_mysql_insert as FnJsonToI32),
-            get_songs: Some(w_get_songs as FnJsonToStr),
-            media_open: Some(w_media_open as FnVoidStr),
-            media_close: Some(w_media_close as FnVoidUnit),
-            media_get_playing: Some(w_media_get_playing as FnGetI32),
-            media_set_volume: Some(w_media_set_volume as FnSetI32),
-            media_set_mute: Some(w_media_set_mute as FnSetI32),
-            media_get_mute: Some(w_media_get_mute as FnGetI32),
-            media_set_pan: Some(w_media_set_pan as FnSetI32),
-            media_get_pan: Some(w_media_get_pan as FnGetI32),
-            media_get_length: Some(w_media_get_length as FnGetI64),
-            media_get_position: Some(w_media_get_position as FnGetI64),
-            media_set_position: Some(w_media_set_position as FnSetI64),
-            media_play: Some(w_media_play as FnVoidUnit),
-            media_pause: Some(w_media_pause as FnVoidUnit),
-            media_stop: Some(w_media_stop as FnVoidUnit),
-            capi_set_message: Some(w_capi_set_message as FnVoidStr),
-            engine_get_state: Some(w_engine_get_state as FnGetJson),
-            engine_set_transition: Some(w_engine_set_transition as FnSetI32),
-            engine_get_transition: Some(w_engine_get_transition as FnGetI32),
-            engine_set_paused: Some(w_engine_set_paused as FnSetI32),
-            engine_get_paused: Some(w_engine_get_paused as FnGetI32),
-            webcaster_get_is_connected: Some(w_webcaster_get_is_connected as FnGetI32),
-            webcaster_get_dnc_count: Some(w_webcaster_get_dnc_count as FnGetI64),
-            webcaster_get_stream_uptime: Some(w_webcaster_get_stream_uptime as FnGetI64),
-            webcaster_get_global_uptime: Some(w_webcaster_get_global_uptime as FnGetI64),
-            webcaster_listener_get_count: Some(w_webcaster_listener_get_count as FnGetI32),
-            webcaster_listener_get_listener: Some(w_webcaster_listener_get_listener as FnJsonToStr),
-            webcaster_listener_get_listeners: Some(w_webcaster_listener_get_listeners as FnGetJson),
-            get_startup: Some(w_get_startup as FnGetStr),
-            set_startup: Some(w_set_startup as FnVoidStrStr),
-            get_version: Some(w_get_version as FnGetStr),
-            restart: Some(w_restart as FnVoidUnit),
-            vuscope_add_to_vuscope: Some(w_vuscope_add_to_vuscope as FnSetI32),
-            vuscope_remove_from_vuscope: Some(w_vuscope_remove_from_vuscope as FnSetI32),
-            vuscope_set_peak_left: Some(w_vuscope_set_peak_left as FnSetF32),
-            vuscope_set_peak_right: Some(w_vuscope_set_peak_right as FnSetF32),
-            vuscope_set_playing: Some(w_vuscope_set_playing as FnSetI32),
-            vuscope_set_scrolling: Some(w_vuscope_set_scrolling as FnSetI32),
-            vuscope_set_scrolling2: Some(w_vuscope_set_scrolling2 as FnSetI32),
-            vuscope_set_clip: Some(w_vuscope_set_clip as FnVoidStr),
-            vuscope_set_level_left: Some(w_vuscope_set_level_left as FnSetF32),
-            vuscope_set_level_right: Some(w_vuscope_set_level_right as FnSetF32),
-            sound_cards_get_count: Some(w_sound_cards_get_count as FnGetI32),
-            sound_cards_get_get_sound_card: Some(w_sound_cards_get_get_sound_card as FnJsonToStr),
-        }
-    }
-}
-
-// `FnSetStr` is a private type alias in abi; re-specified here to avoid
-// exporting another public name.
-type FnSetStr_ = unsafe extern "C" fn(*mut c_void, *const c_char);

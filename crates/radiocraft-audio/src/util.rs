@@ -63,7 +63,7 @@ impl StreamResampler {
         }
     }
 
-    fn frame_at(&self, chunk: &[f32], base: usize, i: usize) -> &[f32] {
+    fn frame_at<'a>(&'a self, chunk: &'a [f32], base: usize, i: usize) -> &'a [f32] {
         if i < base {
             &self.carry
         } else {

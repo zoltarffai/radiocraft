@@ -1,8 +1,6 @@
 //! `settings_database.xml` — DB connection info and auto-backup options
 //! (docs/02 §1, §A-8).
 
-
-
 settings_struct! {
     /// Options persisted in `settings_database.xml`.
     pub struct DatabaseSettings {

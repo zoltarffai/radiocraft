@@ -6,6 +6,8 @@
 //! reads them with `Convert.ToInt32(...)` style helpers), so this module wraps
 //! [`KvStore`] with typed lookup helpers instead of a generated struct.
 
+use std::fmt;
+
 use crate::error::Error;
 use crate::kvstore::{KvStore, SettingValue};
 
@@ -74,7 +76,10 @@ impl PluginSettings {
     /// Typed lookup with a fallback (mirrors the plugin C# idiom
     /// `int.TryParse(GetSetting(...), out v) ? v : fallback`).
     pub fn get_as<T: SettingValue>(&self, key: &str, default: T) -> T {
-        self.store.get(key).and_then(T::parse_opt).unwrap_or(default)
+        self.store
+            .get(key)
+            .and_then(T::parse_opt)
+            .unwrap_or(default)
     }
 
     /// Set a value as a raw string.
@@ -104,10 +109,12 @@ impl PluginSettings {
     pub fn keys(&self) -> impl Iterator<Item = &str> {
         self.store.keys()
     }
+}
 
+impl fmt::Display for PluginSettings {
     /// Serialize to the DataSet XML layout.
-    pub fn to_string(&self) -> String {
-        self.store.to_string()
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.store)
     }
 }
 
@@ -141,8 +148,8 @@ mod tests {
         let p = PluginSettings::parse(FIXTURE).unwrap();
         assert_eq!(p.get("FileEncoding"), Some("2"));
         assert_eq!(p.get_as("FileEncoding", 0i32), 2);
-        assert_eq!(p.get_as("Export2Web", true), false);
-        assert_eq!(p.get_as("Export2File", false), true);
+        assert!(!p.get_as("Export2Web", true));
+        assert!(p.get_as("Export2File", false));
         assert_eq!(p.get_as("MissingKey", 7i32), 7);
         assert!(p.contains("TargetPath"));
         assert!(!p.contains("Nope"));
@@ -157,7 +164,7 @@ mod tests {
         let text = p.to_string();
         let p2 = PluginSettings::parse(&text).unwrap();
         assert_eq!(p, p2);
-        assert_eq!(p2.get_as("Export2Web", false), true);
+        assert!(p2.get_as("Export2Web", false));
         assert_eq!(p2.get("TargetPort"), Some("NO SERIAL PORT"));
         assert_eq!(p2.get("FileEncoding"), None);
         assert!(text.starts_with("<?xml version=\"1.0\" encoding=\"utf-8\" standalone=\"yes\"?>"));

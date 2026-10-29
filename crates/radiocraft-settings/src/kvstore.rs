@@ -65,7 +65,8 @@ impl KvStore {
                         in_settings = true;
                         cur_key = None;
                         cur_value = None;
-                    } else if in_settings && (name.as_ref() == b"Key" || name.as_ref() == b"Value") {
+                    } else if in_settings && (name.as_ref() == b"Key" || name.as_ref() == b"Value")
+                    {
                         // Text child follows; capture the raw content.
                         let want_key = name.as_ref() == b"Key";
                         match reader.read_event() {
@@ -90,7 +91,10 @@ impl KvStore {
                             Ok(_) => {
                                 return Err(Error::xml(
                                     &path,
-                                    format!("unexpected event inside <{}>", if want_key { "Key" } else { "Value" }),
+                                    format!(
+                                        "unexpected event inside <{}>",
+                                        if want_key { "Key" } else { "Value" }
+                                    ),
                                 ));
                             }
                             Err(e) => return Err(Error::xml(&path, e.to_string())),
@@ -114,31 +118,36 @@ impl KvStore {
         Ok(store)
     }
 
-    /// Serialize back to the RadioDJ DataSet layout.
-    pub fn to_string(&self) -> String {
-        String::from_utf8(self.to_bytes()).expect("XML writer always produces UTF-8")
-    }
-
     /// Serialize back to the RadioDJ DataSet layout as bytes.
     pub fn to_bytes(&self) -> Vec<u8> {
         let mut writer = Writer::new(Vec::new());
         // Exactly the declaration RadioDJ's DataSet.WriteXml emits.
         writer
-            .write_event(Event::Decl(BytesDecl::new("1.0", Some("utf-8"), Some("yes"))))
+            .write_event(Event::Decl(BytesDecl::new(
+                "1.0",
+                Some("utf-8"),
+                Some("yes"),
+            )))
             .expect("writing to Vec<u8> is infallible");
+        write_break(&mut writer);
         writer
             .write_event(Event::Start(BytesStart::new("NewDataSet")))
             .expect("writing to Vec<u8> is infallible");
         for (key, value) in &self.entries {
+            write_break(&mut writer);
             writer
                 .write_event(Event::Start(BytesStart::new("Settings")))
                 .expect("writing to Vec<u8> is infallible");
+            write_break(&mut writer);
             write_text_element(&mut writer, "Key", key);
+            write_break(&mut writer);
             write_text_element(&mut writer, "Value", value);
+            write_break(&mut writer);
             writer
                 .write_event(Event::End(BytesEnd::new("Settings")))
                 .expect("writing to Vec<u8> is infallible");
         }
+        write_break(&mut writer);
         writer
             .write_event(Event::End(BytesEnd::new("NewDataSet")))
             .expect("writing to Vec<u8> is infallible");
@@ -148,8 +157,7 @@ impl KvStore {
     /// Read a settings file from disk.
     pub fn load(path: impl AsRef<Path>) -> Result<KvStore, Error> {
         let path = path.as_ref();
-        let text = std::fs::read_to_string(path)
-            .map_err(|e| Error::io(path, e))?;
+        let text = std::fs::read_to_string(path).map_err(|e| Error::io(path, e))?;
         KvStore::parse(&text).map_err(|e| match e {
             Error::Xml { .. } => Error::xml(path, e.to_string()),
             other => other,
@@ -164,7 +172,10 @@ impl KvStore {
 
     /// Lookup a key (exact, case-sensitive).
     pub fn get(&self, key: &str) -> Option<&str> {
-        self.entries.iter().find(|(k, _)| k == key).map(|(_, v)| v.as_str())
+        self.entries
+            .iter()
+            .find(|(k, _)| k == key)
+            .map(|(_, v)| v.as_str())
     }
 
     /// Typed lookup for any [`SettingValue`].
@@ -213,15 +224,29 @@ impl KvStore {
     }
 }
 
+impl std::fmt::Display for KvStore {
+    /// Serialize back to the RadioDJ DataSet layout.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let xml =
+            String::from_utf8(Self::to_bytes(self)).expect("XML writer always produces UTF-8");
+        f.write_str(&xml)
+    }
+}
+
+fn write_break(writer: &mut Writer<Vec<u8>>) {
+    std::io::Write::write_all(writer.get_mut(), b"\n").expect("writing to Vec<u8> is infallible");
+}
+
 fn write_text_element(writer: &mut Writer<Vec<u8>>, name: &str, content: &str) {
     if content.is_empty() {
         // RadioDJ (DataSet.WriteXml) writes empty values self-closed as `<Value />`.
-        writer
-            .write(format_args!("<{name} />"))
+        std::io::Write::write_all(writer.get_mut(), format!("<{name} />").as_bytes())
             .expect("writing to Vec<u8> is infallible");
     } else {
         let start = BytesStart::new(name);
-        writer.write_event(Event::Start(start)).expect("writing to Vec<u8> is infallible");
+        writer
+            .write_event(Event::Start(start))
+            .expect("writing to Vec<u8> is infallible");
         let escaped = escape_xml(content);
         writer
             .write_event(Event::Text(BytesText::from_escaped(escaped)))
@@ -275,7 +300,11 @@ impl SettingValue for bool {
     }
     fn format(&self) -> String {
         // RadioDJ (C#) writes `True`/`False` capitalized.
-        if *self { "True".to_string() } else { "False".to_string() }
+        if *self {
+            "True".to_string()
+        } else {
+            "False".to_string()
+        }
     }
 }
 
@@ -439,6 +468,7 @@ macro_rules! settings_struct {
 }
 
 #[cfg(test)]
+#[allow(dead_code)]
 mod tests {
     use super::*;
 
@@ -506,7 +536,9 @@ mod tests {
 
     #[test]
     fn handles_bom_and_empty_document() {
-        let store = KvStore::parse("\u{feff}<?xml version=\"1.0\" standalone=\"yes\"?>\n<NewDataSet />").unwrap();
+        let store =
+            KvStore::parse("\u{feff}<?xml version=\"1.0\" standalone=\"yes\"?>\n<NewDataSet />")
+                .unwrap();
         assert!(store.is_empty());
     }
 
@@ -523,7 +555,7 @@ mod tests {
         let s = Sample::from_kv(&store);
         assert_eq!(*s.priority(), 2);
         assert_eq!(*s.threshold_start(), -25);
-        assert_eq!(*s.auto_play(), true);
+        assert!(*s.auto_play());
         assert_eq!(s.extras(), &[("UnknownKey".to_string(), "x".to_string())]);
     }
 
@@ -531,7 +563,7 @@ mod tests {
     fn defaults_match_declared_values() {
         let s = Sample::default();
         assert_eq!(*s.priority(), 2);
-        assert_eq!(*s.auto_play(), false);
+        assert!(!s.auto_play());
         assert_eq!(s.station_name(), "RadioDJ");
         assert_eq!(*s.threshold_start(), -25);
     }

@@ -1,7 +1,5 @@
 //! `settings_general.xml` — application and UI configuration (docs/02 §1).
 
-
-
 settings_struct! {
     /// Options persisted in `settings_general.xml`.
     ///

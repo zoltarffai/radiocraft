@@ -4,7 +4,7 @@
 use std::ffi::{c_char, c_int, c_void};
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
-use crate::abi::{consume_json, json_arg, to_cstr_ptr, to_json_ptr, HostVtable, REGISTER_OK};
+use crate::abi::{consume_json, json_arg, to_json_ptr, HostVtable};
 use crate::host::{EventAction, Host, StateInfo};
 use crate::plugin::{Plugin, PluginInfo};
 
@@ -72,8 +72,11 @@ unsafe extern "C" fn init_shim<T: Plugin>(user: *mut c_void, host_vt: *const Hos
     }
     let plugin = unsafe { &mut *(user as *mut T) };
     let vt = unsafe { (*host_vt).clone() };
-    let bridge = unsafe { crate::abi::HostBridge::new(vt) };
-    let _ = fence(|| plugin.init(&bridge));
+    // Intentionally leaked: mirroring the original host where `IHost` stays
+    // valid for the whole plugin lifetime, this bridge (and the plugin's own
+    // copies of it) stay valid until the process exits.
+    let bridge = Box::leak(Box::new(unsafe { crate::abi::HostBridge::new(vt) }));
+    let _ = fence(|| plugin.init(bridge as &dyn Host));
 }
 
 unsafe extern "C" fn run_action_shim<T: Plugin>(

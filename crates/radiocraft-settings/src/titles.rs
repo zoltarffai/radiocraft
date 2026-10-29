@@ -1,8 +1,6 @@
 //! `settings_titles.xml` — per-track-type display titles and colors
 //! (docs/02 §1). Colors are .NET `ColorTranslator` ARGB integers.
 
-
-
 settings_struct! {
     /// Options persisted in `settings_titles.xml`. Each track type has a
     /// `Color_<Type>` and `Title_<Type>` pair; the title is a template that

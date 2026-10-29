@@ -66,7 +66,7 @@ impl PeakMeter {
                 self.hold_until = now_sec + self.hold_ms / 1000.0;
             } else if now_sec > self.hold_until {
                 let db = lin_to_db_f32(self.holds[i].max(1e-7))
-                    - self.decay_db_per_sec * (now_sec - self.hold_until) as f32;
+                    - (self.decay_db_per_sec * (now_sec - self.hold_until)) as f32;
                 self.holds[i] = 10f32.powf(db / 20.0).max(0.0);
             }
             self.rms_sum += (a * a) as f64;

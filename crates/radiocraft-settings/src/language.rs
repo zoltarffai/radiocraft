@@ -69,7 +69,9 @@ impl LanguageTable {
                     self.culture = value.clone();
                 }
             } else {
-                self.strings.entry(key.clone()).or_insert_with(|| value.clone());
+                self.strings
+                    .entry(key.clone())
+                    .or_insert_with(|| value.clone());
             }
         }
     }

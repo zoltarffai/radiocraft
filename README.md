@@ -9,6 +9,7 @@ scripts, manuals, and config files.
 ```
 docs/       rebuild specifications (database schema, feature ledger, plugin ABI, architecture)
 analysis/   reverse-engineering corpus (class maps, plugin API signatures, manual text dumps)
+              analysis/decompiled-csharp/ = full C# decompile (ilspycmd) of all binaries
 il/         offline IL disassembly of the original binaries (RadioDJ.exe, 13 plugin DLLs)
 reference/  bundled originals: MySQL schema DDL, sample settings XMLs
 crates/     the Rust workspace (7 crates, GPL-3.0-only)

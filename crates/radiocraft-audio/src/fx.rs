@@ -294,7 +294,7 @@ impl MidSideWidth {
             return (left, right);
         }
         let mid = (left + right) * 0.5;
-        let side = (left - right) * 0.5 * self.width;
+        let side = (left - right) * 0.5 * self.width as f32;
         (mid + side, mid - side)
     }
 }
