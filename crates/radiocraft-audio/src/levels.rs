@@ -14,7 +14,7 @@ pub struct PeakMeter {
     per_ch: Vec<f32>,
     holds: Vec<f32>,
     hold_until: f64,
-    rms_sum: f64,
+    rms_sum: Vec<f64>,
     rms_frames: u64,
     pub rms: Vec<f32>,
     /// Peak-hold duration (ms) before the hold decays.
@@ -37,7 +37,7 @@ impl PeakMeter {
             per_ch: vec![0.0; channels],
             holds: vec![0.0; channels],
             hold_until: 0.0,
-            rms_sum: 0.0,
+            rms_sum: vec![0.0; channels],
             rms_frames: 0,
             rms: vec![0.0; channels],
             hold_ms,
@@ -69,16 +69,15 @@ impl PeakMeter {
                     - (self.decay_db_per_sec * (now_sec - self.hold_until)) as f32;
                 self.holds[i] = 10f32.powf(db / 20.0).max(0.0);
             }
-            self.rms_sum += (a * a) as f64;
+            self.rms_sum[i] += (a * a) as f64;
+            self.rms[i] = (self.rms_sum[i] / (self.rms_frames.max(1)) as f64).sqrt() as f32;
         }
         self.rms_frames += 1;
-        // refresh RMS twice per second
+        // restart the RMS averaging window twice per second
         if self.rms_frames >= (self.rate as u64 / 2).max(1) {
-            let n = self.rms_frames.max(1) as f64 / self.channels as f64;
-            for c in self.rms.iter_mut() {
-                *c = (self.rms_sum / n).sqrt() as f32;
+            for c in self.rms_sum.iter_mut() {
+                *c = 0.0;
             }
-            self.rms_sum = 0.0;
             self.rms_frames = 0;
         }
     }
@@ -114,7 +113,7 @@ impl PeakMeter {
         for v in self.holds.iter_mut() {
             *v = 0.0;
         }
-        self.rms_sum = 0.0;
+        self.rms_sum.iter_mut().for_each(|s| *s = 0.0);
         self.rms_frames = 0;
         for v in self.rms.iter_mut() {
             *v = 0.0;

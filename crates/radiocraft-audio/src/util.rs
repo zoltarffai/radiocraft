@@ -65,14 +65,19 @@ impl StreamResampler {
 
     fn frame_at<'a>(&'a self, chunk: &'a [f32], base: usize, i: usize) -> &'a [f32] {
         if i < base {
-            &self.carry
+            return &self.carry;
+        }
+        let off = (i - base) * self.chans;
+        if off + self.chans <= chunk.len() {
+            &chunk[off..off + self.chans]
+        } else if chunk.len() >= self.chans {
+            // End of signal: clamp to the last frame in the chunk so the
+            // final interpolated output frames tail off smoothly instead
+            // of pulling stale carry data across the boundary.
+            let last = (chunk.len() / self.chans - 1) * self.chans;
+            &chunk[last..last + self.chans]
         } else {
-            let off = (i - base) * self.chans;
-            if off + self.chans <= chunk.len() {
-                &chunk[off..off + self.chans]
-            } else {
-                &self.carry
-            }
+            &self.carry
         }
     }
 
@@ -82,7 +87,7 @@ impl StreamResampler {
         let base = self.consumed;
         let end = base + in_frames;
         let step = self.in_rate / self.out_rate;
-        while self.pos < (end.saturating_sub(1)) as f64 {
+        while self.pos < end as f64 {
             let idx = self.pos.floor() as usize;
             let frac = (self.pos - idx as f64) as f32;
             let a = self.frame_at(input, base, idx);
@@ -102,7 +107,7 @@ impl StreamResampler {
     /// Emit the remaining interpolated frames past the last pushed chunk.
     pub fn flush(&mut self, out: &mut Vec<f32>) {
         let step = self.in_rate / self.out_rate;
-        while self.pos < (self.consumed.saturating_sub(1)) as f64 {
+        while self.pos < self.consumed as f64 {
             let idx = self.pos.floor() as usize;
             let frac = (self.pos - idx as f64) as f32;
             let a = self.frame_at(&[], 0, idx);

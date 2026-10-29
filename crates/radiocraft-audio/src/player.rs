@@ -269,7 +269,6 @@ pub struct Player {
     overlap: Option<Stream>,
     paused: bool,
     events: VecDeque<PlayerEvent>,
-    mix: Vec<f32>,
 }
 
 impl Player {
@@ -281,7 +280,6 @@ impl Player {
             overlap: None,
             paused: false,
             events: VecDeque::new(),
-            mix: Vec::new(),
         }
     }
 

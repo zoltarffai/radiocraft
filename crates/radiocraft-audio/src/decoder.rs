@@ -234,6 +234,10 @@ impl Source for FileSource {
             Err(e) => Err(AudioError::Invalid(format!("seek not supported: {e}"))),
         }
     }
+
+    fn duration(&self) -> Option<std::time::Duration> {
+        self.duration
+    }
 }
 
 // ---------------------------------------------------------------------------

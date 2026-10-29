@@ -152,12 +152,10 @@ impl KWeighting {
 #[derive(Debug)]
 pub struct LoudnessMeter {
     kw: KWeighting,
-    rate: f64,
     block_len: usize,
     block_pos: usize,
     sum_sq: [f64; 2],
     mean_sq: [f64; 2],
-    mean_pos: usize,
     /// per-block loudness (LUFS), uncalibrated sum of channel powers
     blocks: Vec<f64>,
     max_block: f64,
@@ -171,12 +169,10 @@ impl LoudnessMeter {
         let block_len = (rate * (BLOCK_MS / 1000.0)).round() as usize;
         Self {
             kw: KWeighting::new(rate),
-            rate,
             block_len: block_len.max(1),
             block_pos: 0,
             sum_sq: [0.0; 2],
             mean_sq: [0.0; 2],
-            mean_pos: 0,
             blocks: Vec::new(),
             max_block: f64::MIN,
             max_sample: 0.0,
@@ -335,8 +331,8 @@ impl TruePeakCh {
                 let h = self.hist[(self.pos + i) % 8];
                 acc += h * t;
             }
-            // coefficients sum to 4 (oversampled gain); normalize
-            let v = (acc * 0.25).abs();
+            // each polyphase branch sums to unity DC gain
+            let v = acc.abs();
             if v > peak {
                 peak = v;
             }
@@ -468,7 +464,8 @@ mod tests {
                 cnt += 1.0;
             }
         }
-        20.0 * (sum / cnt).sqrt().log10()
+        // convert sine rms to amplitude gain: rms of a unity sine is 1/sqrt(2)
+        20.0 * (2.0 * sum / cnt).sqrt().log10()
     }
 
     #[test]
@@ -513,11 +510,12 @@ mod tests {
 
     #[test]
     fn gated_out_burst() {
-        // 2 s loud, 4 s silence in between: only the loud blocks count
+        // loud bursts aligned to 400 ms gating blocks, quiet gap between:
+        // only the loud blocks count
         let mut buf = Vec::new();
-        buf.extend(sine_stereo(1000.0, 0.5, 1.0, 44100.0));
+        buf.extend(sine_stereo(1000.0, 0.5, 0.8, 44100.0));
         buf.extend(sine_stereo(1000.0, 0.0001, 4.0, 44100.0));
-        buf.extend(sine_stereo(1000.0, 0.5, 1.0, 44100.0));
+        buf.extend(sine_stereo(1000.0, 0.5, 0.8, 44100.0));
         let l = integrated_lufs(&buf, 44100.0).unwrap();
         assert!((l - (-6.011)).abs() < 0.2, "got {l}");
     }

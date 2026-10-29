@@ -70,7 +70,6 @@ pub struct LevelSnapshot {
 /// A playing item in one playout zone.
 struct Slot {
     player: Player,
-    zone: Zone,
     track_type: i32,
     is_overlay: bool,
 }
@@ -139,7 +138,6 @@ impl PlayoutEngine {
         let mut inner = self.inner.lock();
         let slot = inner.slots.entry(zone).or_insert_with(|| Slot {
             player: Player::new(crate::SAMPLE_RATE as f64),
-            zone,
             track_type,
             is_overlay,
         });
@@ -155,7 +153,6 @@ impl PlayoutEngine {
         let mut inner = self.inner.lock();
         let slot = inner.slots.entry(zone).or_insert_with(|| Slot {
             player: Player::new(crate::SAMPLE_RATE as f64),
-            zone,
             track_type,
             is_overlay,
         });
@@ -629,7 +626,7 @@ mod tests {
         }
         let saved = eng.stop_recording().unwrap();
         assert_eq!(saved, PathBuf::from(&path));
-        let mut r = hound::WavReader::open(&path).unwrap();
+        let r = hound::WavReader::open(&path).unwrap();
         assert!(r.duration() > 1000);
         std::fs::remove_dir_all(&dir).ok();
     }
