@@ -1,0 +1,6 @@
+FROM quay.io/pypa/manylinux_2_28_x86_64
+# Rust toolchain
+RUN curl -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain stable
+ENV PATH=/root/.cargo/bin:${PATH}
+# Build deps for GUI/audio crates on AlmaLinux 8 base (for AppImage builds)
+RUN dnf install -y --allowerasing alsa-lib-devel libX11-devel libXcursor-devel libXi-devel libXrandr-devel libXinerama-devel libXxf86vm-devel mesa-libGL-devel pkgconfig perl-podlators && dnf clean all

@@ -1,0 +1,9 @@
+[package]
+name = "radiocraft-settings"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+quick-xml = "0.37"
+thiserror.workspace = true

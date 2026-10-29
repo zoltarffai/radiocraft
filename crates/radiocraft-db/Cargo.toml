@@ -1,0 +1,26 @@
+[package]
+name = "radiocraft-db"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "MySQL/MariaDB persistence layer for RadioCraft (radiodj3-compatible schema)"
+
+[dependencies]
+radiocraft-core.workspace = true
+anyhow.workspace = true
+serde.workspace = true
+chrono.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+tokio.workspace = true
+sqlx = { version = "0.8", default-features = false, features = [
+    "runtime-tokio",
+    "mysql",
+    "chrono",
+    "rust_decimal",
+    "tls-rustls-ring",
+] }
+rust_decimal = "1"
+
+[dev-dependencies]
+anyhow.workspace = true
