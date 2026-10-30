@@ -17,8 +17,8 @@ use chrono::{DateTime, Local};
 use radiocraft_audio::device::{self, NullSink};
 use radiocraft_audio::engine::{EngineConfig, PlayoutEngine};
 use radiocraft_core::model::SongData;
-use radiocraft_db::{self, Db, DbConfig};
-use radiocraft_net::nowplaying::{ExportConfig, NowPlayingExporter, NowPlayingSnapshot};
+use radiocraft_db::{self as db, Db, DbConfig};
+use radiocraft_net::nowplaying::{ExportConfig, NowPlayingExporter};
 use radiocraft_plugin::PluginRegistry;
 use radiocraft_settings::{DatabaseSettings, GeneralSettings, PluginSettings};
 use rust_decimal::prelude::ToPrimitive;
@@ -185,7 +185,7 @@ pub fn db_config_from(database: &DatabaseSettings) -> DbConfig {
     cfg.username = database.db_username().clone();
     cfg.password = database.db_pass().clone();
     cfg.ssl = if database.ssl() {
-        db::config::SslMode::VerifyCa
+        db::config::SslMode::Required
     } else {
         db::config::SslMode::Disabled
     };
@@ -351,9 +351,7 @@ impl AppState {
 
     pub fn disconnect_db(&mut self) {
         if let Some(db) = self.db.take() {
-            if let Err(err) = self.rt.block_on(db.close()) {
-                self.report_error("closing the database connection", &err);
-            }
+            self.rt.block_on(db.close());
         }
         self.library = LibraryCache::default();
         self.set_status("Disconnected from the database");
@@ -381,7 +379,7 @@ impl AppState {
             Ok((total, songs)) => {
                 self.library = LibraryCache {
                     fetched_at: Some(Local::now()),
-                    total: i64::from(total),
+                    total: i64::try_from(total).unwrap_or(i64::MAX),
                     rows: songs.iter().map(row_from_db_song).collect(),
                 };
                 self.library_ui.selected = None;
@@ -443,15 +441,22 @@ impl AppState {
             track_type: playing.track_type,
             ..Default::default()
         };
-        if !self.exporter.config().should_export(&song) {
+        if !self.exporter.config.should_export(&song) {
             return;
         }
-        let snapshot = NowPlayingSnapshot::from_song(self.general.station_name(), &song);
         let context = self.exporter.context_for(&song);
-        if let Err(err) = self.exporter.export_file(&snapshot, &context) {
+        let file_result = self
+            .exporter
+            .export_file(&context, &song)
+            .map_err(anyhow::Error::from);
+        if let Err(err) = file_result {
             self.report_error("writing the now-playing file", &err);
         }
-        if let Err(err) = self.exporter.export_web(&snapshot, &context) {
+        let web_result = self
+            .exporter
+            .export_web(&context, &song)
+            .map_err(anyhow::Error::from);
+        if let Err(err) = web_result {
             self.report_error("publishing the now-playing page", &err);
         }
     }

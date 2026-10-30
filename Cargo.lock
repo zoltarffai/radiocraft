@@ -3779,6 +3779,7 @@ dependencies = [
  "anyhow",
  "chrono",
  "eframe",
+ "egui",
  "egui_extras",
  "radiocraft-audio",
  "radiocraft-core",
