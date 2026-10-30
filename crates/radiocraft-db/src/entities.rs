@@ -991,8 +991,10 @@ pub async fn pending_request_for_song(pool: &MySqlPool, songID: u32) -> Result<O
 // history
 // ---------------------------------------------------------------------------
 
-/// One `history` row. Defined here and re-exported by [`crate::booking`] —
-/// radiocraft-core has no history model, so this crate owns it.
+/// One `history` row as read back from the table (SELECT side, carries the
+/// generated `ID`). The write side is `radiocraft_core::booking::HistoryEntry`
+/// — the planner's INSERT projection without the ID — which is
+/// deliberately a separate type: sqlx `FromRow` stays out of core.
 #[derive(Debug, Clone, PartialEq, Serialize, sqlx::FromRow)]
 pub struct HistoryEntry {
     pub ID: u32,
