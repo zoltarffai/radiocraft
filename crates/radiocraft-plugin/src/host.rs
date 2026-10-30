@@ -168,6 +168,8 @@ pub enum PluginUiRequest {
 // No `PartialEq`: core's `SongData` does not implement it and import payloads carry songs.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
+#[allow(clippy::large_enum_variant)] // the `Track` payload is a SongData by design —
+// it is the `ImportFile(TrackPlayer)` overload; boxing would only add churn
 pub enum ImportRequest {
     /// `long ImportFile(string FilePath, bool fromURL, long subcatID = 0, long genreID = 0)`
     FilePath {

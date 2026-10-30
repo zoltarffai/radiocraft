@@ -4,6 +4,9 @@
 //! Every wire function is panic-fenced (`catch_unwind`) so host panics never
 //! cross the FFI boundary; decoding failures fall back to defaults, encoding
 //! failures return NULL.
+#![allow(clippy::missing_safety_doc)] // every `unsafe extern "C"` wire fn here is
+// NULL-tolerant and panic-fenced by construction — the whole point of the
+// shim layer is that no pointer a plugin passes can be trusted or fatal.
 
 use std::ffi::{c_char, c_int, c_void};
 use std::panic::{catch_unwind, AssertUnwindSafe};

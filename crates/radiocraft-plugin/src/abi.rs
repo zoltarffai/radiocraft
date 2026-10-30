@@ -19,6 +19,9 @@
 //! `IHost` interface, analysis/decompiled-csharp/PluginInterface/rdjInterface/IHost.cs).
 //! Every slot is optional: NULL means "host does not provide this" (mirrors the
 //! defensive `if (host != null)`/partial-feature semantics of the original host).
+#![allow(clippy::missing_safety_doc)] // every `unsafe extern "C"` fn in this file,
+// macro-generated or hand-written, is NULL-tolerant and panic-fenced by
+// construction — no caller pointer contract is ever observable or fatal.
 
 use std::ffi::{c_char, c_int, c_void, CStr, CString};
 use std::panic::{catch_unwind, AssertUnwindSafe};
@@ -69,7 +72,10 @@ pub unsafe fn read_cstr<'a>(ptr: *const c_char) -> &'a str {
 }
 
 /// NULL-safe JSON argument: NULL or invalid → `Default::default()`.
-pub fn json_arg<T: DeserializeOwned + Default>(ptr: *const c_char) -> T {
+///
+/// # Safety
+/// `ptr` must be NULL or point to a valid NUL-terminated C string.
+pub unsafe fn json_arg<T: DeserializeOwned + Default>(ptr: *const c_char) -> T {
     let raw = unsafe { read_cstr(ptr) };
     if raw.is_empty() {
         return T::default();
@@ -82,7 +88,7 @@ pub(crate) fn consume_json<T: DeserializeOwned + Default>(ptr: *mut c_char) -> T
     if ptr.is_null() {
         return T::default();
     }
-    let value = json_arg::<T>(ptr);
+    let value = unsafe { json_arg::<T>(ptr) };
     unsafe { radiocraft_abi_free_string(ptr) };
     value
 }

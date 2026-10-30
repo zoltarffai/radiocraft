@@ -82,7 +82,7 @@ fn plugin_vtable_round_trip() {
     unsafe {
         (vt.get_info.unwrap())(user, &mut info_ptr);
     };
-    let info: PluginInfo = serde_json::from_str(&unsafe { abi::read_cstr(info_ptr) }).unwrap();
+    let info: PluginInfo = serde_json::from_str(unsafe { abi::read_cstr(info_ptr) }).unwrap();
     unsafe { abi::radiocraft_abi_free_string(info_ptr) };
     assert_eq!(
         info,
@@ -98,7 +98,7 @@ fn plugin_vtable_round_trip() {
     unsafe {
         (vt.get_actions.unwrap())(user, &mut actions_ptr);
     };
-    let actions: Vec<EventAction> = serde_json::from_str(&unsafe { abi::read_cstr(actions_ptr) }).unwrap();
+    let actions: Vec<EventAction> = serde_json::from_str(unsafe { abi::read_cstr(actions_ptr) }).unwrap();
     unsafe { abi::radiocraft_abi_free_string(actions_ptr) };
     assert_eq!(actions.len(), 2);
     assert_eq!(actions[0].name, "Ping");
@@ -303,7 +303,7 @@ fn null_safe_wrappers() {
     bridge.debug_add_line("ignored");
 
     // json_arg / read_cstr handle null.
-    assert_eq!(abi::json_arg::<serde_json::Value>(std::ptr::null()), serde_json::Value::Null);
+    assert_eq!(unsafe { abi::json_arg::<serde_json::Value>(std::ptr::null()) }, serde_json::Value::Null);
     assert_eq!(unsafe { abi::read_cstr(std::ptr::null()) }, "");
 
     let _ = &bridge;

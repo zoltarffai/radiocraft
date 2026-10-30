@@ -72,8 +72,17 @@ fn config_dir() -> Result<PathBuf> {
     let base = match std::env::var_os("XDG_CONFIG_HOME") {
         Some(home) if !home.is_empty() => PathBuf::from(home),
         _ => {
-            let home = std::env::var_os("HOME").context("HOME is not set")?;
-            PathBuf::from(home).join(".config")
+            #[cfg(windows)]
+            {
+                // Windows has no $HOME; %APPDATA% is the per-user config root.
+                let appdata = std::env::var_os("APPDATA").context("APPDATA is not set")?;
+                PathBuf::from(appdata)
+            }
+            #[cfg(not(windows))]
+            {
+                let home = std::env::var_os("HOME").context("HOME is not set")?;
+                PathBuf::from(home).join(".config")
+            }
         }
     };
     Ok(base.join("radiocraft"))

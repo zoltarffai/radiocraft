@@ -205,7 +205,10 @@ impl Source for FileSource {
                 break;
             }
             let take = (want - produced).min(self.pending.len() / 2);
-            for chunk in buf[produced * 2..produced * 2 + take * 2].chunks_exact_mut(2) {
+            for chunk in buf[produced * 2..produced * 2 + take * 2]
+                .as_chunks_mut::<2>()
+                .0
+            {
                 chunk[0] = self.pending.pop_front().unwrap_or(0.0);
                 chunk[1] = self.pending.pop_front().unwrap_or(0.0);
             }

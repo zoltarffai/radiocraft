@@ -199,7 +199,7 @@ impl LoudnessMeter {
 
     /// Observe an interleaved stereo buffer.
     pub fn observe_buffer(&mut self, buf: &[f32]) {
-        for pair in buf.chunks_exact(2) {
+        for pair in buf.as_chunks::<2>().0 {
             self.observe_frame(pair[0], pair[1]);
         }
     }
@@ -362,7 +362,7 @@ impl TruePeakMeter {
     }
     /// Observe an interleaved stereo buffer.
     pub fn observe_buffer(&mut self, buf: &[f32]) {
-        for pair in buf.chunks_exact(2) {
+        for pair in buf.as_chunks::<2>().0 {
             self.observe(pair[0], pair[1]);
         }
     }
@@ -401,7 +401,7 @@ pub fn integrated_lufs(buf: &[f32], rate: f64) -> Option<f64> {
 pub fn true_peak_dbtp(buf: &[f32], rate: f64) -> f64 {
     let _ = rate;
     let mut m = TruePeakMeter::new();
-    for pair in buf.chunks_exact(2) {
+    for pair in buf.as_chunks::<2>().0 {
         m.observe(pair[0], pair[1]);
     }
     m.true_peak_db()

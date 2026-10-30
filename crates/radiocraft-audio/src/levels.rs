@@ -84,7 +84,7 @@ impl PeakMeter {
 
     /// Feed an interleaved buffer of frames.
     pub fn observe_buffer(&mut self, buf: &[f32]) {
-        for frame in buf.chunks_exact(self.channels.max(2).min(2).max(1)) {
+        for frame in buf.chunks_exact(self.channels.max(1)) {
             self.observe(frame);
         }
     }

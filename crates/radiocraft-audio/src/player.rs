@@ -611,7 +611,7 @@ mod tests {
             }
         }
         assert!(played_any);
-        assert!(total >= 1.0 && total < 1.4, "played {total}s");
+        assert!((1.0..1.4).contains(&total), "played {total}s");
         let events = p.drain_events();
         assert!(events.contains(&PlayerEvent::Finished));
     }

@@ -1137,16 +1137,18 @@ mod tests {
 
     #[test]
     fn export_draft_keys_round_trip_web_items() {
-        let mut draft = ExportDraft::default();
-        draft.export_to_file = true;
-        draft.target_path = "C:\\nowplaying.txt".to_string();
-        draft.encoding = 2;
-        draft.web_urls = vec![
-            "http://host/a".to_string(),
-            "http://host/b".to_string(),
-            "  ".to_string(),
-        ];
-        draft.web_methods = vec!["post".to_string(), "GET".to_string(), "post".to_string()];
+        let draft = ExportDraft {
+            export_to_file: true,
+            target_path: "C:\\nowplaying.txt".to_string(),
+            encoding: 2,
+            web_urls: vec![
+                "http://host/a".to_string(),
+                "http://host/b".to_string(),
+                "  ".to_string(),
+            ],
+            web_methods: vec!["post".to_string(), "GET".to_string(), "post".to_string()],
+            ..Default::default()
+        };
         let keys = draft.to_keys();
         let get = |k: &str| {
             keys.iter()

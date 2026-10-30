@@ -116,7 +116,7 @@ unsafe extern "C" fn destroy_shim<T: Plugin>(user: *mut c_void) {
 /// `T::default()`. The vtable's `user_data` owns the instance; call the
 /// `destroy` entry (or `NativePlugin`'s Drop) to release it.
 pub fn new_plugin_vtable<T: Plugin + Default>() -> PluginVtable {
-    let instance = Box::into_raw(Box::new(T::default())) as *mut c_void;
+    let instance = Box::into_raw(Box::<T>::default()) as *mut c_void;
     PluginVtable {
         user_data: instance,
         get_info: Some(info_shim::<T>),

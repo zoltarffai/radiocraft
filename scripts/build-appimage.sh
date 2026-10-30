@@ -8,7 +8,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 stage=/tmp/rc-build
 rm -rf "$stage" && mkdir -p "$stage/dist"
 tar -C "$ROOT" --exclude=.git --exclude=target --exclude=out -cf - . | tar -C "$stage" -xf -
-podman run --rm --userns=keep-id -v "$stage:/src:Z" "$IMAGE" bash -e -c '
+podman run --rm -v "$stage:/src:Z" "$IMAGE" bash -e -c '
   set -e
   if ! command -v linuxdeploy >/dev/null 2>&1; then
     curl -sL -o /usr/local/bin/linuxdeploy \

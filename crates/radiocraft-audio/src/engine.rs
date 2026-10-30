@@ -655,7 +655,7 @@ mod tests {
         }
         let _silence_after = last;
         // position should reflect the early stop
-        assert!(eng.remaining_secs(Zone::Main).map_or(true, |r| r < 5.0));
+        assert!(eng.remaining_secs(Zone::Main).is_none_or(|r| r < 5.0));
     }
 
     #[test]
