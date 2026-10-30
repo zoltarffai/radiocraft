@@ -33,7 +33,8 @@ EOF
   test -f "$appdir/radiocraft.png" || python3 - <<'PY'
 import struct, zlib
 w = h = 256
-raw = b"".join(b"\x00" + b"\x12\x22\x36\x255\x99\xff" * w for _ in range(h))
+pixel = b"\x12\x22\x36\xff"  # RGBA
+raw = b"".join(b"\x00" + pixel * w for _ in range(h))
 def chunk(tag, data):
     return struct.pack(">I", len(data)) + tag + data + struct.pack(">I", zlib.crc32(tag + data) & 0xFFFFFFFF)
 png = (b"\x89PNG\r\n\x1a\n"
@@ -43,6 +44,9 @@ png = (b"\x89PNG\r\n\x1a\n"
 open("/src/out/radiocraft.AppDir/radiocraft.png", "wb").write(png)
 PY
   export VERSION=0.1.0
+  # linuxdeploy ships as an AppImage; containers have no FUSE, so run it
+  # extracted-to-temp instead of mounted.
+  export APPIMAGE_EXTRACT_AND_RUN=1
   linuxdeploy --appdir "$appdir" --desktop-file "$appdir/radiocraft.desktop" \
     --icon-file "$appdir/radiocraft.png" --output appimage
   mkdir -p /src/dist && mv radiocraft-*.AppImage /src/dist/ 2>/dev/null || \
