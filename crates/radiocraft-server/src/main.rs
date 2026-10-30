@@ -32,11 +32,15 @@ async fn main() -> Result<()> {
     let app = Arc::new(App::load(&config_dir).context("loading settings")?);
     app.set_status(radiocraft_server::state::Status::info("Server starting")).await;
 
+    // Engine pump thread: renders blocks into the sink so playback actually
+    // advances. Safe because the engine lives inside this Arc and never moves.
+    app.engine.start_pump();
+
     // Serve the built web UI when it exists next to the binary.
     let web_dist = std::env::var("RADIOCRAFT_WEB_DIST")
         .map(PathBuf::from)
         .or_else(|_| {
-            let candidate = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../web/dist");
+            let candidate = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../web/dist");
             if candidate.exists() {
                 Ok(candidate)
             } else {

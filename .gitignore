@@ -4,3 +4,5 @@ dist/
 *.err
 analysis/decompiled-csharp/**/*.csproj
 analysis/decompiled-csharp/**/app.ico
+web/node_modules/
+web/dist/

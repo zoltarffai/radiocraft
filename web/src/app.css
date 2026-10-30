@@ -1,0 +1,129 @@
+/* RadioCraft dashboard theme: dark, broadcast-console look. */
+
+:root {
+  color-scheme: dark;
+
+  --bg: #0f1215;
+  --panel: #171b21;
+  --panel-2: #1d232b;
+  --border: #2a323d;
+  --fg: #dde3ea;
+  --fg-dim: #8b98a7;
+  --accent: #3aa1ff;
+  --accent-dim: #1f4a73;
+  --ok: #38c172;
+  --warn: #e8b339;
+  --err: #e0574f;
+
+  --meter-track: #262d36;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+  background: var(--bg);
+  color: var(--fg);
+  font: 14px/1.45 "Inter", "Segoe UI", system-ui, sans-serif;
+}
+
+#app {
+  height: 100%;
+}
+
+button {
+  font: inherit;
+  color: inherit;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 12px;
+  cursor: pointer;
+}
+
+button:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+
+button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+button.primary {
+  background: var(--accent-dim);
+  border-color: var(--accent);
+  color: #eaf4ff;
+}
+
+button.danger {
+  border-color: var(--err);
+  color: #f3b5b1;
+}
+
+input,
+select {
+  font: inherit;
+  color: var(--fg);
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 8px;
+}
+
+input:focus,
+select:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.panel > h2 {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--fg-dim);
+}
+
+.mono {
+  font-family: "JetBrains Mono", ui-monospace, "Cascadia Mono", monospace;
+  font-variant-numeric: tabular-nums;
+}
+
+/* shared meter bar */
+.meter {
+  position: relative;
+  height: 10px;
+  border-radius: 5px;
+  background: var(--meter-track);
+  overflow: hidden;
+}
+
+.meter > .fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  background: linear-gradient(90deg, #2f9e5f 0%, #2f9e5f 55%, #d9b13b 78%, #d9584e 100%);
+}
+
+.meter > .tick {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: #ffffffaa;
+}

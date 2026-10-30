@@ -584,6 +584,20 @@ mod tests {
     }
 
     #[test]
+    fn pump_thread_advances_playback() {
+        // Guards the server integration: without start_pump nobody feeds the
+        // sink and playback is frozen at position 0.
+        let eng = PlayoutEngine::headless(EngineConfig::default());
+        let req = PlayRequest::new(Box::new(sine_source(440.0, 2.0, 0.5, 44_100.0)));
+        eng.play(Zone::Main, req, 3, false).unwrap();
+        eng.start_pump();
+        std::thread::sleep(std::time::Duration::from_millis(400));
+        let pos = eng.position_secs(Zone::Main).unwrap_or(0.0);
+        eng.stop_pump();
+        assert!(pos > 0.05, "pump thread should advance playback, got {pos}");
+    }
+
+    #[test]
     fn finished_event_surfaces() {
         let (eng, req) = sine_engine(0.5, 0.02);
         eng.play(Zone::Main, req, 0, false).unwrap();
