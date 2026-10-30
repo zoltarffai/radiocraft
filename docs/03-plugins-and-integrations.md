@@ -18,6 +18,20 @@ Plugin actions: `GetPluginActions() -> List<EventAction>`, `RunPluginAction(Even
 
 (Complete exact C#-level signatures in `analysis/plugin-api-overrides.txt`; RadioCraft's `radiocraft-plugin` crate defines `HostTrait` + `PluginTrait` with 1:1 semantics; each is bridged over a C ABI for cross-platform native plugins and optionally over JSON-RPC/stdio for scripted plugins.)
 
+**ABI compatibility note (resolved finding).** The authoritative interface source is now decompiled at
+`analysis/decompiled-csharp/PluginInterface/rdjInterface/IHost.cs`: 61 methods + 13 properties
+(74 surface members; the IL overrides dump lists 73 entries incl. accessor-name quirks). The original
+plugins consume `IHost` through **.NET COM/interop of a managed interface** — there is no recoverable
+native vtable layout, so byte-compatible loading of the original Windows DLL plugins from Rust is
+not possible (and would require re-implementing the CLR hosting). RadioCraft instead defines its own
+stable C-ABI (`radiocraft-plugin::abi`): a `#[repr(C)]` `HostVtable` in **IHost.cs declaration order**,
+70 optional slots + `user_data` header, every slot NULL-tolerant and `catch_unwind`-fenced, with
+`ref DataSet`/`DataGridView` parameters collapsed to JSON (`ImportRequest`, `PluginUiRequest`) and
+overloads merged (`ImportFile×3→import_file`, `Show*×6→show_ui`). Third-party plugins targeting
+RadioCraft are rebuilt against this ABI; the member *set and semantics* match the original exactly.
+`StateChange` raw enum values were obfuscated and unrecoverable — unrecognized values pass through
+as `Other(i32)`.
+
 ## 2. `rdjInterface.SongData` — track record DTO (87 members)
 
 Identity/meta: ID, IDGenre, IDSubcat, TrackNo, Artist, OriginalArtist, AssociatedArtists, Title, Album, AlbumArt, Composer, Label, Publisher, Copyright, Isrc, Year, DiscNo, Language, MixType, Mood, Gender, Rating, Comments, AlternateTitle, BuyLink, URL1, URL2, ISRC, VtID, PlayerID, SwID, Sweepers, SwFirst, SwPlay.
