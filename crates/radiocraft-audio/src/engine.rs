@@ -226,6 +226,12 @@ impl PlayoutEngine {
         self.inner.lock().slots.get(&zone).is_some_and(|s| s.player.is_playing())
     }
 
+    /// Whether the zone's player is currently paused (`is_playing` stays
+    /// true while paused, like RadioDJ's transport).
+    pub fn is_paused(&self, zone: Zone) -> bool {
+        self.inner.lock().slots.get(&zone).is_some_and(|s| s.player.is_paused())
+    }
+
     pub fn position_secs(&self, zone: Zone) -> Option<f64> {
         self.inner.lock().slots.get(&zone).map(|s| s.player.position_secs())
     }
@@ -254,6 +260,21 @@ impl PlayoutEngine {
 
     pub fn set_zone_fader_db(&self, zone: Zone, db: f64) {
         self.inner.lock().mixer.set_zone_fader_db(zone, db);
+    }
+
+    /// Current zone fader position (dB).
+    pub fn zone_fader_db(&self, zone: Zone) -> f64 {
+        self.inner.lock().mixer.zone_fader_db(zone)
+    }
+
+    /// Whether a zone is currently muted.
+    pub fn is_zone_muted(&self, zone: Zone) -> bool {
+        self.inner.lock().mixer.is_zone_muted(zone)
+    }
+
+    /// Current live master gain (dB).
+    pub fn master_db(&self) -> f64 {
+        self.inner.lock().mixer.master_db()
     }
 
     pub fn set_zone_muted(&self, zone: Zone, mute: bool) {

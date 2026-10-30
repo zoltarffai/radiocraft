@@ -164,7 +164,8 @@ pub fn volume_out_to_db(volume_out: i32) -> f64 {
     if percent == 0 {
         f64::NEG_INFINITY
     } else {
-        f64::from(percent).log10() * 200.0
+        // 0..100 linear percent → dB, so 100% maps to 0 dBFS.
+        f64::from(percent).log10() * 20.0 - 40.0
     }
 }
 

@@ -21,7 +21,7 @@ sqlx = { version = "0.8", default-features = false, features = [
     "rust_decimal",
     "tls-rustls-ring",
 ] }
-rust_decimal = "1"
+rust_decimal.workspace = true
 
 [dev-dependencies]
 anyhow.workspace = true

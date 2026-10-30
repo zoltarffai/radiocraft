@@ -1,0 +1,33 @@
+[package]
+name = "radiocraft-server"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "RadioCraft headless playout server: engine + WebSocket/REST API + web UI host"
+
+[[bin]]
+name = "radiocraft-server"
+path = "src/main.rs"
+
+[dependencies]
+radiocraft-core.workspace = true
+radiocraft-db.workspace = true
+radiocraft-audio.workspace = true
+radiocraft-settings.workspace = true
+radiocraft-net.workspace = true
+anyhow.workspace = true
+axum = { version = "0.8", features = ["ws"] }
+tower-http = { version = "0.6", features = ["fs"] }
+futures-util = "0.3"
+serde.workspace = true
+serde_json.workspace = true
+chrono.workspace = true
+sha2 = "0.10"
+tracing.workspace = true
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tokio = { workspace = true, features = ["signal"] }
+rust_decimal.workspace = true
+
+[dev-dependencies]
+axum-test = { version = "21", features = ["ws"] }
+tokio-tungstenite = "0.24"
