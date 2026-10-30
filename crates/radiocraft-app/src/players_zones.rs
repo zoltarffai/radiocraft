@@ -10,7 +10,7 @@
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use radiocraft_audio::decoder::FileSource;
+use radiocraft_audio::decoder::{FileSource, Source};
 use radiocraft_audio::engine::PlayoutEngine;
 use radiocraft_audio::mixer::{ALL_ZONES, Zone};
 use radiocraft_audio::player::PlayRequest;
@@ -42,7 +42,7 @@ pub fn zone_label(zone: Zone) -> &'static str {
 /// `None` everywhere means "the stored value was the zero sentinel": the
 /// engine falls back to its defaults (start at 0, no VDF trim, full file,
 /// configured fade length).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct CuePlan {
     /// `cstart`: absolute position the stream starts at.
     pub start_at: Option<f64>,
@@ -292,7 +292,7 @@ pub fn apply_mix(panel: &ZonePanel, engine: &PlayoutEngine) {
 pub fn pick_file(state: &mut AppState) -> Option<PathBuf> {
     let root = state.last_used_path();
     let picked = rfd::FileDialog::new()
-        .set_root(&root)
+        .set_directory(&root)
         .add_filter(
             "Audio",
             &["mp3", "flac", "ogg", "wav", "m4a", "mp4", "aac"],
@@ -370,7 +370,7 @@ impl PlayersUi {
             .show(ctx, |ui| {
                 for index in 0..self.panels.len() {
                     let zone = self.panels[index].zone;
-                    let panel = &self.panels[index];
+                    let panel = self.panels[index].clone();
                     let (wave, points) = match panel.track_path.as_ref() {
                         Some(path) => {
                             let data = waveform_for(&mut self.wave_cache, &state.engine, path);
@@ -409,7 +409,7 @@ impl PlayersUi {
                                         egui::pos2(x, mid - high * scale),
                                         egui::pos2(x, mid - low * scale),
                                     ],
-                                    egui::Stroke::new(1.0, egui::Color3F::from_rgb(70, 130, 230)),
+                                    egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(70, 130, 230)),
                                 );
                                 ui.painter().add(line);
                             }
@@ -497,5 +497,86 @@ impl PlayersUi {
                 apply_mix(panel, &state.engine);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use radiocraft_audio::decoder::MemorySource;
+
+    fn item(cstart: &str, cnext: &str, cend: &str, fin: &str, fout: &str) -> NewPlaylistItem {
+    NewPlaylistItem {
+        pID: 1,
+        sID: 7,
+        cstart: cstart.parse().unwrap(),
+        cnext: cnext.parse().unwrap(),
+        cend: cend.parse().unwrap(),
+        fin: fin.parse().unwrap(),
+        fout: fout.parse().unwrap(),
+        ..Default::default()
+    }
+    }
+
+    #[test]
+    fn zeros_are_the_not_set_sentinel() {
+        let plan = cue_plan(&item("0", "0", "0", "0", "0"));
+        assert_eq!(
+            plan,
+            CuePlan {
+                start_at: None,
+                vdf_target: None,
+                stop_at: None,
+                fade_in_ms: None,
+                fade_out_ms: None,
+            }
+        );
+    }
+
+    #[test]
+    fn cue_columns_map_onto_engine_knobs() {
+        let plan = cue_plan(&item("1.5", "42.25", "90", "250", "1500"));
+        assert_eq!(plan.start_at, Some(1.5));
+        assert_eq!(plan.vdf_target, Some(42.25));
+        assert_eq!(plan.stop_at_secs(), Some(90.0));
+        assert_eq!(plan.fade_in_ms, Some(250));
+        assert_eq!(plan.fade_out_ms, Some(1500));
+    }
+
+    #[test]
+    fn field_based_plan_treats_zero_the_same_way() {
+        let plan = cue_plan_from_fields(0.0, 0.0, 12.5, 0, 800);
+        assert_eq!(plan.start_at, None);
+        assert_eq!(plan.vdf_target, None);
+        assert_eq!(plan.stop_at, Some(12.5));
+        assert_eq!(plan.fade_in_ms, None);
+        assert_eq!(plan.fade_out_ms, Some(800));
+    }
+
+    #[test]
+    fn apply_marks_missing_fades_with_the_default_marker() {
+        let source = Box::new(MemorySource::from_mono(&[0.0; 8], 44_100.0));
+        let plan = CuePlan {
+            start_at: Some(2.0),
+            vdf_target: Some(30.0),
+            stop_at: None,
+            fade_in_ms: Some(400),
+            fade_out_ms: None,
+        };
+        let req = plan.apply(PlayRequest::new(source));
+        assert_eq!(req.fade_in_ms, 400);
+        assert_eq!(req.fade_out_ms, -1);
+        assert_eq!(req.start_at_secs, Some(2.0));
+        assert_eq!(req.vdf_target_secs, Some(30.0));
+    }
+
+    #[test]
+    fn apply_without_cues_leeps_the_request_untouched() {
+        let source = Box::new(MemorySource::from_mono(&[0.0; 8], 44_100.0));
+        let req = CuePlan::default().apply(PlayRequest::new(source));
+        assert_eq!(req.fade_in_ms, 0);
+        assert_eq!(req.fade_out_ms, -1);
+        assert_eq!(req.start_at_secs, None);
+        assert_eq!(req.vdf_target_secs, None);
     }
 }

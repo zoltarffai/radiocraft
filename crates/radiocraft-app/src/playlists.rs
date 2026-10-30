@@ -46,7 +46,7 @@ pub fn reindex_ords(mut items: Vec<NewPlaylistItem>) -> Vec<NewPlaylistItem> {
 /// The insert row `items[idx]` moves to after/below `items[target]`.
 ///
 /// Returns the new index of the moved row, or `None` if it cannot move.
-pub fn swap_rows(rows: &mut [PlaylistRow], idx: usize, target: usize) -> Option<usize> {
+pub fn swap_rows(rows: &mut Vec<PlaylistRow>, idx: usize, target: usize) -> Option<usize> {
     if idx >= rows.len() || target >= rows.len() || idx == target {
         return None;
     }
@@ -178,7 +178,7 @@ impl PlaylistsUi {
                         .unwrap_or_else(|| "(missing song)".to_string()),
                     duration_secs: song
                         .as_ref()
-                        .and_then(|s| rust_decimal::Decimal::to_f64(&s.duration))
+                        .and_then(|s| rust_decimal::prelude::ToPrimitive::to_f64(&s.duration))
                         .unwrap_or(0.0),
                 });
             }
@@ -459,7 +459,7 @@ impl PlaylistsUi {
                         ui.strong("Length");
                         for (i, row) in self.rows.iter().enumerate() {
                             let sel = self.selected == Some(i);
-                            ui.selectable_label(sel, (i + 1).to_string());
+                            let _ = ui.selectable_label(sel, (i + 1).to_string());
                             if ui
                                 .selectable_label(sel, &row.artist)
                                 .clicked()

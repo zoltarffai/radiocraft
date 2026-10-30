@@ -14,10 +14,11 @@ use std::time::Instant;
 
 use anyhow::{Context as _, Result};
 use chrono::{DateTime, Local};
-use radiocraft_audio::device::{self, NullSink};
+use radiocraft_audio::device::{DeviceManager, NullSink};
 use radiocraft_audio::engine::{EngineConfig, PlayoutEngine};
 use radiocraft_core::model::SongData;
-use radiocraft_db::{self as db, Db, DbConfig};
+use radiocraft_db::config::DbConfig;
+use radiocraft_db::{self as db, Db};
 use radiocraft_net::nowplaying::{ExportConfig, NowPlayingExporter};
 use radiocraft_plugin::PluginRegistry;
 use radiocraft_settings::{DatabaseSettings, GeneralSettings, PluginSettings};
@@ -184,7 +185,7 @@ pub fn db_config_from(database: &DatabaseSettings) -> DbConfig {
     let mut cfg = DbConfig::new(database.db_server(), database.db_name());
     cfg.username = database.db_username().clone();
     cfg.password = database.db_pass().clone();
-    cfg.ssl = if database.ssl() {
+    cfg.ssl = if *database.ssl() {
         db::config::SslMode::Required
     } else {
         db::config::SslMode::Disabled
@@ -247,7 +248,7 @@ impl AppState {
             general.station_name(),
         );
         let engine_cfg = engine_config(&general);
-        let engine = match device::open_default_sink() {
+        let engine = match DeviceManager::open_default_sink() {
             Ok(sink) => PlayoutEngine::new(engine_cfg, sink),
             Err(e) => {
                 tracing::warn!("no audio device ({e}); using a null sink");
@@ -340,10 +341,13 @@ impl AppState {
                 self.db = Some(db);
                 self.set_status(format!("Connected to {database} on {host}"));
                 self.load_library();
-                self.playlists_ui.load_lists(self);
+                let mut playlists_ui = std::mem::take(&mut self.playlists_ui);
+                playlists_ui.load_lists(self);
+                self.playlists_ui = playlists_ui;
             }
             Err(err) => {
                 self.db = None;
+                let err = anyhow::Error::from(err);
                 self.report_error("connecting to the database", &err);
             }
         }

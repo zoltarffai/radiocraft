@@ -11,3 +11,6 @@ pub mod players_zones;
 pub mod playlists;
 pub mod state;
 pub mod windows;
+
+#[cfg(feature = "tray")]
+pub mod tray;

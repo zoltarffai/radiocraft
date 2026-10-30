@@ -9,7 +9,7 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context as _, Result};
-use radiocraft_audio::decoder::FileSource;
+use radiocraft_audio::decoder::{FileSource, Source};
 use radiocraft_db::entities::{NewSong, Song};
 use rust_decimal::Decimal;
 use rust_decimal::prelude::ToPrimitive;
@@ -101,10 +101,19 @@ pub fn new_song_from_path(path: &Path) -> Result<NewSong> {
 /// Insert files, skipping paths already in the table (RadioDJ's behaviour).
 /// Returns the paths that were actually added.
 pub fn add_files(state: &mut AppState, paths: &[PathBuf]) -> Result<Vec<PathBuf>> {
-    let Some(db) = state.db.as_ref() else {
-        state.set_status("Connect to the database first");
-        return Ok(Vec::new());
+    let db = match state.db.take() {
+        Some(db) => db,
+        None => {
+            state.set_status("Connect to the database first");
+            return Ok(Vec::new());
+        }
     };
+    let result = add_files_with_db(state, &db, paths);
+    state.db = Some(db);
+    result
+}
+
+fn add_files_with_db(state: &mut AppState, db: &radiocraft_db::Db, paths: &[PathBuf]) -> Result<Vec<PathBuf>> {
     let pool = db.pool();
     let mut added = Vec::new();
     let mut failures = 0usize;
@@ -158,7 +167,7 @@ pub fn add_files(state: &mut AppState, paths: &[PathBuf]) -> Result<Vec<PathBuf>
 pub fn pick_audio_files(state: &mut AppState) -> Vec<PathBuf> {
     let root = state.last_used_path();
     let picked = rfd::FileDialog::new()
-        .set_root(&root)
+        .set_directory(&root)
         .add_filter(
             "Audio",
             &["mp3", "flac", "ogg", "wav", "m4a", "mp4", "aac"],
@@ -250,7 +259,9 @@ impl LibraryUi {
             if ui.button("Add to playlist").clicked() && have_sel {
                 let row_id = i32::try_from(state.library.rows[self.selected.unwrap()].id)
                     .unwrap_or(0);
-                state.playlists_ui.add_songs(state, &[row_id]);
+                let mut playlists_ui = std::mem::take(&mut state.playlists_ui);
+                playlists_ui.add_songs(state, &[row_id]);
+                state.playlists_ui = playlists_ui;
             }
             if ui.button("Play now").clicked() && have_sel {
                 let row = state.library.rows[self.selected.unwrap()].clone();
@@ -285,7 +296,9 @@ impl LibraryUi {
                     if button.double_clicked() {
                         self.selected = Some(i);
                         let row_id = i32::try_from(row.id).unwrap_or(0);
-                        state.playlists_ui.add_songs(state, &[row_id]);
+                        let mut playlists_ui = std::mem::take(&mut state.playlists_ui);
+                        playlists_ui.add_songs(state, &[row_id]);
+                        state.playlists_ui = playlists_ui;
                     }
                 }
             });
