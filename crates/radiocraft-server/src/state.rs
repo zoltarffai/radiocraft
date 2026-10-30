@@ -255,6 +255,31 @@ impl App {
         })
     }
 
+    /// Where the settings files live.
+    pub fn config_dir(&self) -> &Path {
+        &self.config_dir
+    }
+
+    /// Write the current `db_cfg` back to `settings_database.xml`
+    /// (`DbServer` is stored as `host:port`).
+    pub async fn persist_db_cfg(&self) -> Result<()> {
+        let cfg = self.db_cfg.read().await.clone();
+        let path = self.config_dir.join(DatabaseSettings::FILE);
+        let mut database = if path.exists() {
+            DatabaseSettings::load(&path).with_context(|| DatabaseSettings::FILE)?
+        } else {
+            DatabaseSettings::default()
+        };
+        if !database.set_raw("DbServer", &format!("{}:{}", cfg.host, cfg.port)) {
+            anyhow::bail!("could not set DbServer");
+        }
+        database.set_raw("DbName", &cfg.database);
+        database.set_raw("DbUsername", &cfg.username);
+        database.set_raw("DbPass", &cfg.password);
+        database.save(&path).with_context(|| DatabaseSettings::FILE)?;
+        Ok(())
+    }
+
     /// Push a status line (also echoed on the WS event stream).
     pub async fn set_status(&self, status: impl Into<Status>) {
         let status = status.into();

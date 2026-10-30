@@ -747,6 +747,45 @@ pub async fn list_playlist_items(pool: &MySqlPool, playlist_id: u32) -> Result<V
     .await?)
 }
 
+/// A `playlists_list` row plus the library song columns (artist/title/path)
+/// when `sID` points at a real song; negative/sentinel sIDs join to NULL.
+#[derive(Debug, Clone, Serialize, sqlx::FromRow)]
+pub struct PlaylistItemRow {
+    pub ID: u32,
+    pub pID: u32,
+    pub sID: i32,
+    pub cstart: Decimal,
+    pub cnext: Decimal,
+    pub cend: Decimal,
+    pub fin: Decimal,
+    pub fout: Decimal,
+    pub swID: u32,
+    pub swplay: Decimal,
+    pub vtID: u32,
+    pub vtplay: Decimal,
+    pub swfirst: bool,
+    pub ord: u32,
+    pub artist: Option<String>,
+    pub title: Option<String>,
+    pub path: Option<String>,
+}
+
+pub async fn list_playlist_items_with_songs(
+    pool: &MySqlPool,
+    playlist_id: u32,
+) -> Result<Vec<PlaylistItemRow>> {
+    Ok(sqlx::query_as::<_, PlaylistItemRow>(
+        "SELECT pl.ID, pl.pID, pl.sID, pl.cstart, pl.cnext, pl.cend, pl.fin, pl.fout, \
+         pl.swID, pl.swplay, pl.vtID, pl.vtplay, pl.swfirst, pl.ord, \
+         s.artist, s.title, s.path \
+         FROM playlists_list pl LEFT JOIN songs s ON s.ID = pl.sID \
+         WHERE pl.pID = ? ORDER BY pl.ord",
+    )
+    .bind(playlist_id)
+    .fetch_all(pool)
+    .await?)
+}
+
 pub async fn insert_playlist_item(pool: &MySqlPool, i: &NewPlaylistItem) -> Result<u32> {
     let mut conn = pool.acquire().await?;
     sqlx::query(
@@ -1201,6 +1240,35 @@ pub async fn delete_cart(pool: &MySqlPool, id: u32) -> Result<u64> {
 pub async fn list_cart_buttons(pool: &MySqlPool, cart_id: u32) -> Result<Vec<CartButton>> {
     Ok(sqlx::query_as::<_, CartButton>(
         "SELECT ID, pID, swID, swButton, color FROM carts_list WHERE pID = ? ORDER BY swButton",
+    )
+    .bind(cart_id)
+    .fetch_all(pool)
+    .await?)
+}
+
+/// A `carts_list` button joined with its library song, for cartwall display.
+#[derive(Debug, Clone, Serialize, sqlx::FromRow)]
+pub struct CartButtonRow {
+    pub ID: u32,
+    pub pID: u32,
+    pub swID: u32,
+    pub swButton: u32,
+    pub color: String,
+    pub artist: Option<String>,
+    pub title: Option<String>,
+    pub path: Option<String>,
+    pub duration: Option<Decimal>,
+}
+
+pub async fn list_cart_buttons_with_songs(
+    pool: &MySqlPool,
+    cart_id: u32,
+) -> Result<Vec<CartButtonRow>> {
+    Ok(sqlx::query_as::<_, CartButtonRow>(
+        "SELECT c.ID, c.pID, c.swID, c.swButton, c.color, \
+         s.artist, s.title, s.path, s.duration \
+         FROM carts_list c LEFT JOIN songs s ON s.ID = c.swID \
+         WHERE c.pID = ? ORDER BY c.swButton",
     )
     .bind(cart_id)
     .fetch_all(pool)

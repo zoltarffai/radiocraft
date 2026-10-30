@@ -116,6 +116,38 @@ async fn run(app: &Arc<App>, op: &str, args: &Value) -> Result<Value> {
         }
 
         // ---- database ---------------------------------------------------------
+        "get_db_config" => {
+            let cfg = app.db_cfg.read().await;
+            Ok(json!({
+                "host": cfg.host,
+                "port": cfg.port,
+                "database": cfg.database,
+                "username": cfg.username,
+                "password": cfg.password,
+            }))
+        }
+        "db_configure" => {
+            {
+                let mut cfg = app.db_cfg.write().await;
+                if let Some(v) = args.get("host").and_then(Value::as_str) {
+                    cfg.host = v.to_string();
+                }
+                if let Some(v) = args.get("port").and_then(Value::as_u64) {
+                    cfg.port = v as u16;
+                }
+                if let Some(v) = args.get("database").and_then(Value::as_str) {
+                    cfg.database = v.to_string();
+                }
+                if let Some(v) = args.get("username").and_then(Value::as_str) {
+                    cfg.username = v.to_string();
+                }
+                if let Some(v) = args.get("password").and_then(Value::as_str) {
+                    cfg.password = v.to_string();
+                }
+            }
+            app.persist_db_cfg().await?;
+            Ok(json!({}))
+        }
         "db_connect" => {
             app.connect_db().await?;
             let db = app.require_db().await?;
@@ -143,6 +175,30 @@ async fn run(app: &Arc<App>, op: &str, args: &Value) -> Result<Value> {
             let (limit, offset) = page(args);
             let rows = radiocraft_db::entities::list_history(db.pool(), limit, offset).await?;
             Ok(json!({ "history": rows }))
+        }
+
+        // ---- playlists & carts -------------------------------------------------
+        "list_playlists" => {
+            let db = app.require_db().await?;
+            let playlists = radiocraft_db::entities::list_playlists(db.pool()).await?;
+            Ok(json!({ "playlists": playlists }))
+        }
+        "list_playlist_items" => {
+            let db = app.require_db().await?;
+            let id = arg_u32(args, "playlistId")?;
+            let items = radiocraft_db::entities::list_playlist_items_with_songs(db.pool(), id).await?;
+            Ok(json!({ "items": items }))
+        }
+        "list_carts" => {
+            let db = app.require_db().await?;
+            let carts = radiocraft_db::entities::list_carts(db.pool()).await?;
+            Ok(json!({ "carts": carts }))
+        }
+        "list_cart_buttons" => {
+            let db = app.require_db().await?;
+            let id = arg_u32(args, "cartId")?;
+            let buttons = radiocraft_db::entities::list_cart_buttons_with_songs(db.pool(), id).await?;
+            Ok(json!({ "buttons": buttons }))
         }
 
         other => Err(anyhow!("unknown op {other}")),
@@ -271,6 +327,13 @@ fn arg_f64(args: &Value, key: &str) -> Result<f64> {
         .ok_or_else(|| anyhow!("missing numeric arg {key}"))
 }
 
+fn arg_u32(args: &Value, key: &str) -> Result<u32> {
+    args.get(key)
+        .and_then(|v| v.as_u64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
+        .map(|v| v as u32)
+        .ok_or_else(|| anyhow!("missing numeric arg {key}"))
+}
+
 fn arg_i32(args: &Value, key: &str, default: i32) -> i32 {
     args.get(key)
         .and_then(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
@@ -362,7 +425,11 @@ mod tests {
     use super::*;
 
     fn tmp_app() -> Arc<App> {
-        let dir = std::env::temp_dir().join(format!("rc-dispatch-{}", std::process::id()));
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("rc-dispatch-{}-{nanos}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         Arc::new(App::load(&dir).expect("load"))
     }
@@ -377,6 +444,51 @@ mod tests {
                 assert!(message.contains("nope"));
             }
             other => panic!("expected error, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn db_reads_error_without_connection() {
+        let app = tmp_app();
+        for (op, args) in [
+            ("list_playlists", json!({})),
+            ("list_playlist_items", json!({"playlistId": 1})),
+            ("list_carts", json!({})),
+            ("list_cart_buttons", json!({"cartId": 1})),
+        ] {
+            let frame = dispatch(&app, 9, op, &args).await;
+            match frame {
+                Frame::Error { message, .. } => {
+                    assert!(message.contains("database"), "{op}: {message}");
+                }
+                other => panic!("{op}: expected error, got {other:?}"),
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn db_configure_round_trips() {
+        let app = tmp_app();
+        let frame = dispatch(
+            &app,
+            10,
+            "db_configure",
+            &json!({"host": "db.example", "port": 3307, "database": "radio", "username": "u", "password": "p"}),
+        )
+        .await;
+        assert!(matches!(frame, Frame::Result { .. }), "{frame:?}");
+        // persisted and re-readable via the same dir
+        let reopened = Arc::new(App::load(app.config_dir()).expect("reload"));
+        let frame = dispatch(&reopened, 11, "get_db_config", &json!({})).await;
+        match frame {
+            Frame::Result { data, .. } => {
+                assert_eq!(data["host"], "db.example");
+                assert_eq!(data["port"], 3307);
+                assert_eq!(data["database"], "radio");
+                assert_eq!(data["username"], "u");
+                assert_eq!(data["password"], "p");
+            }
+            other => panic!("expected result, got {other:?}"),
         }
     }
 
