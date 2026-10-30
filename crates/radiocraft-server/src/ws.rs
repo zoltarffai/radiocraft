@@ -137,6 +137,8 @@ async fn handle_msg(
                 data: serde_json::json!({
                     "player": app.player_frame(),
                     "state": app.state_frame(),
+                    "status": Frame::Status(app.status_line().await.into()),
+                    "db_connected": app.db.read().await.is_some(),
                 }),
             })
         }

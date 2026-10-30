@@ -8,6 +8,15 @@
 
   const songs = $derived(session.songs);
   const ready = $derived(session.conn === "open" && session.dbConnected);
+  let loadedFor = $state(0);
+
+  // Auto-load the first page once the library becomes ready (after connect).
+  $effect(() => {
+    if (ready && loadedFor !== session.dbConnects) {
+      loadedFor = session.dbConnects;
+      void search();
+    }
+  });
 
   async function search() {
     loading = true;

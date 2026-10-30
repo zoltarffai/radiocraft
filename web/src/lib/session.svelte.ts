@@ -55,6 +55,8 @@ class Session {
 
   /** Library/window data loaded on demand by the windows. */
   dbConnected = $state(false);
+  /** Increments on every successful DB connect; windows use it to auto-refresh. */
+  dbConnects = $state(0);
   songs = $state<SongRow[]>([]);
   playlists = $state<PlaylistHeader[]>([]);
   playlistItems = $state<PlaylistItemRow[]>([]);
@@ -182,6 +184,7 @@ class Session {
   async connectDb(): Promise<number> {
     const r = await this.cmd<{ songs: number }>("db_connect");
     this.dbConnected = true;
+    this.dbConnects++;
     return r.songs;
   }
   async loadSongs(needle?: string): Promise<void> {
@@ -237,7 +240,10 @@ class Session {
       case "status":
         this.status = { level: f.level, message: f.message };
         if (f.level === "error" && f.message.toLowerCase().includes("database")) this.dbConnected = false;
-        else if (/^Connected to /i.test(f.message)) this.dbConnected = true;
+        else if (/^Connected to /i.test(f.message)) {
+          if (!this.dbConnected) this.dbConnects++;
+          this.dbConnected = true;
+        }
         break;
       case "result": {
         const p = this.pending.get(f.id);
@@ -245,6 +251,21 @@ class Session {
           this.pending.delete(f.id);
           const { t: _t, id: _id, op: _op, ...data } = f as Record<string, unknown>;
           p.resolve(data);
+        } else if (f.op === "sub") {
+          // Snapshot frames pushed right after subscribing (player/state/status).
+          const data = f as unknown as {
+            player?: Frame;
+            state?: Frame;
+            status?: Frame;
+            db_connected?: boolean;
+          };
+          if (data.player) this.onFrame(JSON.stringify(data.player));
+          if (data.state) this.onFrame(JSON.stringify(data.state));
+          if (data.status) this.onFrame(JSON.stringify(data.status));
+          if (data.db_connected) {
+            if (!this.dbConnected) this.dbConnects++;
+            this.dbConnected = true;
+          }
         }
         break;
       }
