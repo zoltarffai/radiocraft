@@ -3480,6 +3480,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "sqlx",
  "tokio",
  "tokio-tungstenite 0.24.0",
  "tower-http",

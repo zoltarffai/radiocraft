@@ -96,7 +96,7 @@ pub struct Song {
 }
 
 /// Columns needed to insert a song; everything else keeps its DDL default.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct NewSong {
     pub path: String,
     pub song_type: i8,
@@ -110,11 +110,45 @@ pub struct NewSong {
     pub original_duration: Decimal,
     pub enabled: bool,
     pub weight: Decimal,
+    /// `NOT NULL` columns without schema defaults; the old RadioDJ add-flow
+    /// writes empty strings for all of them.
+    pub alternate_title: String,
+    pub composer: String,
+    pub label: String,
+    pub publisher: String,
+    pub copyright: String,
+    pub isrc: String,
+}
+
+impl Default for NewSong {
+    fn default() -> Self {
+        Self {
+            path: String::new(),
+            song_type: 3,
+            id_subcat: 0,
+            id_genre: 0,
+            artist: String::new(),
+            original_artist: String::new(),
+            title: String::new(),
+            album: String::new(),
+            duration: Decimal::ZERO,
+            original_duration: Decimal::ZERO,
+            enabled: true,
+            weight: Decimal::from(16),
+            alternate_title: String::new(),
+            composer: String::new(),
+            label: String::new(),
+            publisher: String::new(),
+            copyright: String::new(),
+            isrc: String::new(),
+        }
+    }
 }
 
 pub const SQL_SONG_INSERT: &str = "INSERT INTO songs (path, enabled, date_added, date_modified, \
      song_type, id_subcat, id_genre, weight, duration, original_duration, artist, original_artist, \
-     title, album) VALUES (?, ?, NOW(), NOW(), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+     title, album, alternate_title, composer, label, publisher, copyright, isrc) \
+     VALUES (?, ?, NOW(), NOW(), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
 
 /// Insert a song and return its new `ID`.
 pub async fn insert_song(pool: &MySqlPool, s: &NewSong) -> Result<u32> {
@@ -132,9 +166,15 @@ pub async fn insert_song(pool: &MySqlPool, s: &NewSong) -> Result<u32> {
         .bind(&s.original_artist)
         .bind(&s.title)
         .bind(&s.album)
+        .bind(&s.alternate_title)
+        .bind(&s.composer)
+        .bind(&s.label)
+        .bind(&s.publisher)
+        .bind(&s.copyright)
+        .bind(&s.isrc)
         .execute(&mut *conn)
         .await?;
-    let id: i64 = sqlx::query_scalar("SELECT LAST_INSERT_ID()")
+    let id: i64 = sqlx::query_scalar("SELECT CAST(LAST_INSERT_ID() AS SIGNED)")
         .fetch_one(&mut *conn)
         .await?;
     Ok(id as u32)
@@ -270,7 +310,10 @@ pub async fn filter_songs(
     if !f.text.is_empty() {
         let like = format!("%{}%", f.text);
         page = page.bind(like.clone()).bind(like.clone()).bind(like.clone());
-        count = count.bind(like);
+        count = count
+            .bind(like.clone())
+            .bind(like.clone())
+            .bind(like.clone());
     }
     if f.category != 0 {
         page = page.bind(f.category);
@@ -287,9 +330,6 @@ pub async fn filter_songs(
     if f.rotation != 0 {
         page = page.bind(f.rotation);
         count = count.bind(f.rotation);
-    }
-    if let Some(enabled) = f.enabled {
-        page = page.bind(enabled);
     }
     let total: i64 = count.fetch_one(pool).await?;
     let rows = page.bind(f.limit).bind(f.offset).fetch_all(pool).await?;
@@ -486,7 +526,7 @@ pub async fn insert_category(pool: &MySqlPool, name: &str) -> Result<u32> {
         .bind(name)
         .execute(&mut *conn)
         .await?;
-    let id: i64 = sqlx::query_scalar("SELECT LAST_INSERT_ID()").fetch_one(&mut *conn).await?;
+    let id: i64 = sqlx::query_scalar("SELECT CAST(LAST_INSERT_ID() AS SIGNED)").fetch_one(&mut *conn).await?;
     Ok(id as u32)
 }
 
@@ -549,7 +589,7 @@ pub async fn insert_subcategory(
         .bind(sweeper_subID)
         .execute(&mut *conn)
         .await?;
-    let id: i64 = sqlx::query_scalar("SELECT LAST_INSERT_ID()").fetch_one(&mut *conn).await?;
+    let id: i64 = sqlx::query_scalar("SELECT CAST(LAST_INSERT_ID() AS SIGNED)").fetch_one(&mut *conn).await?;
     Ok(id as u32)
 }
 
@@ -588,7 +628,7 @@ pub async fn insert_genre(pool: &MySqlPool, name: &str) -> Result<u32> {
         .bind(name)
         .execute(&mut *conn)
         .await?;
-    let id: i64 = sqlx::query_scalar("SELECT LAST_INSERT_ID()").fetch_one(&mut *conn).await?;
+    let id: i64 = sqlx::query_scalar("SELECT CAST(LAST_INSERT_ID() AS SIGNED)").fetch_one(&mut *conn).await?;
     Ok(id as u32)
 }
 
@@ -631,7 +671,7 @@ pub async fn insert_rotation(pool: &MySqlPool, name: &str) -> Result<u32> {
         .bind(name)
         .execute(&mut *conn)
         .await?;
-    let id: i64 = sqlx::query_scalar("SELECT LAST_INSERT_ID()").fetch_one(&mut *conn).await?;
+    let id: i64 = sqlx::query_scalar("SELECT CAST(LAST_INSERT_ID() AS SIGNED)").fetch_one(&mut *conn).await?;
     Ok(id as u32)
 }
 
@@ -725,7 +765,7 @@ pub async fn insert_criteria(pool: &MySqlPool, c: &RotationCriteria) -> Result<u
     .bind(&c.advanced)
     .execute(&mut *conn)
     .await?;
-    let id: i64 = sqlx::query_scalar("SELECT LAST_INSERT_ID()").fetch_one(&mut *conn).await?;
+    let id: i64 = sqlx::query_scalar("SELECT CAST(LAST_INSERT_ID() AS SIGNED)").fetch_one(&mut *conn).await?;
     Ok(id as u32)
 }
 
@@ -790,7 +830,7 @@ pub async fn insert_playlist(pool: &MySqlPool, name: &str) -> Result<u32> {
         .bind(name)
         .execute(&mut *conn)
         .await?;
-    let id: i64 = sqlx::query_scalar("SELECT LAST_INSERT_ID()").fetch_one(&mut *conn).await?;
+    let id: i64 = sqlx::query_scalar("SELECT CAST(LAST_INSERT_ID() AS SIGNED)").fetch_one(&mut *conn).await?;
     Ok(id as u32)
 }
 
@@ -924,7 +964,7 @@ pub async fn insert_playlist_item(pool: &MySqlPool, i: &NewPlaylistItem) -> Resu
     .bind(i.ord)
     .execute(&mut *conn)
     .await?;
-    let id: i64 = sqlx::query_scalar("SELECT LAST_INSERT_ID()").fetch_one(&mut *conn).await?;
+    let id: i64 = sqlx::query_scalar("SELECT CAST(LAST_INSERT_ID() AS SIGNED)").fetch_one(&mut *conn).await?;
     Ok(id as u32)
 }
 
@@ -976,7 +1016,7 @@ pub async fn append_playlist_song(
     song_id: i32,
 ) -> Result<u32> {
     let mut conn = pool.acquire().await?;
-    let max_ord: i64 = sqlx::query_scalar("SELECT COALESCE(MAX(ord), 0) FROM playlists_list WHERE pID = ?")
+    let max_ord: i64 = sqlx::query_scalar("SELECT CAST(COALESCE(MAX(ord), 0) AS SIGNED) FROM playlists_list WHERE pID = ?")
         .bind(playlist_id)
         .fetch_one(&mut *conn)
         .await?;
@@ -1128,7 +1168,7 @@ pub async fn insert_event(pool: &MySqlPool, e: &EventRow) -> Result<u32> {
     .bind(e.grouped)
     .execute(&mut *conn)
     .await?;
-    let id: i64 = sqlx::query_scalar("SELECT LAST_INSERT_ID()").fetch_one(&mut *conn).await?;
+    let id: i64 = sqlx::query_scalar("SELECT CAST(LAST_INSERT_ID() AS SIGNED)").fetch_one(&mut *conn).await?;
     Ok(id as u32)
 }
 
@@ -1180,7 +1220,7 @@ pub async fn insert_event_category(pool: &MySqlPool, name: &str) -> Result<u32> 
         .bind(name)
         .execute(&mut *conn)
         .await?;
-    let id: i64 = sqlx::query_scalar("SELECT LAST_INSERT_ID()").fetch_one(&mut *conn).await?;
+    let id: i64 = sqlx::query_scalar("SELECT CAST(LAST_INSERT_ID() AS SIGNED)").fetch_one(&mut *conn).await?;
     Ok(id as u32)
 }
 
@@ -1232,7 +1272,7 @@ pub async fn add_request(
         .bind(message)
         .execute(&mut *conn)
         .await?;
-    let id: i64 = sqlx::query_scalar("SELECT LAST_INSERT_ID()").fetch_one(&mut *conn).await?;
+    let id: i64 = sqlx::query_scalar("SELECT CAST(LAST_INSERT_ID() AS SIGNED)").fetch_one(&mut *conn).await?;
     Ok(id as u32)
 }
 
@@ -1385,7 +1425,7 @@ pub async fn filter_history(
     let mut page = sqlx::query_as::<_, HistoryEntry>(&page_sql);
     if !text.is_empty() {
         let like = format!("%{text}%");
-        count = count.bind(like.clone());
+        count = count.bind(like.clone()).bind(like.clone());
         page = page.bind(like.clone()).bind(like);
     }
     let total: i64 = count.fetch_one(pool).await?;
@@ -1414,7 +1454,7 @@ pub async fn add_history_row(
         .bind(song_id)
         .execute(&mut *conn)
         .await?;
-    let id: i64 = sqlx::query_scalar("SELECT LAST_INSERT_ID()").fetch_one(&mut *conn).await?;
+    let id: i64 = sqlx::query_scalar("SELECT CAST(LAST_INSERT_ID() AS SIGNED)").fetch_one(&mut *conn).await?;
     Ok(id as u32)
 }
 
@@ -1483,7 +1523,7 @@ pub async fn enqueue(pool: &MySqlPool, q: &NewQueueItem) -> Result<u32> {
     .bind(q.vtPlay)
     .execute(&mut *conn)
     .await?;
-    let id: i64 = sqlx::query_scalar("SELECT LAST_INSERT_ID()").fetch_one(&mut *conn).await?;
+    let id: i64 = sqlx::query_scalar("SELECT CAST(LAST_INSERT_ID() AS SIGNED)").fetch_one(&mut *conn).await?;
     Ok(id as u32)
 }
 
@@ -1605,7 +1645,7 @@ pub async fn insert_cart(pool: &MySqlPool, name: &str) -> Result<u32> {
         .bind(name)
         .execute(&mut *conn)
         .await?;
-    let id: i64 = sqlx::query_scalar("SELECT LAST_INSERT_ID()").fetch_one(&mut *conn).await?;
+    let id: i64 = sqlx::query_scalar("SELECT CAST(LAST_INSERT_ID() AS SIGNED)").fetch_one(&mut *conn).await?;
     Ok(id as u32)
 }
 
@@ -1676,7 +1716,7 @@ pub async fn insert_cart_button(
         .bind(color)
         .execute(&mut *conn)
         .await?;
-    let id: i64 = sqlx::query_scalar("SELECT LAST_INSERT_ID()").fetch_one(&mut *conn).await?;
+    let id: i64 = sqlx::query_scalar("SELECT CAST(LAST_INSERT_ID() AS SIGNED)").fetch_one(&mut *conn).await?;
     Ok(id as u32)
 }
 
@@ -1725,6 +1765,6 @@ mod tests {
 
     #[test]
     fn song_insert_column_count_matches() {
-        assert_eq!(SQL_SONG_INSERT.matches('?').count(), 12);
+        assert_eq!(SQL_SONG_INSERT.matches('?').count(), 18);
     }
 }

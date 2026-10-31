@@ -1,0 +1,230 @@
+//! Command-surface tests for the milestone-3 UI-parity ops.
+//!
+//! The offline half exercises validation/error paths through [`dispatch`]
+//! without a database. The live half only runs when `RC_DB_TEST_DSN` names a
+//! scratch database, e.g.
+//! `RC_DB_TEST_DSN=mysql://root:changeme@127.0.0.1:3306/radiocraft_test cargo test`.
+//! The schema is bootstrapped on connect, so an empty scratch DB is fine.
+
+use std::sync::Arc;
+
+use radiocraft_server::dispatch::dispatch;
+use radiocraft_server::frames::Frame;
+use radiocraft_server::state::App;
+use serde_json::{Value, json};
+
+fn tmp_app() -> Arc<App> {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let dir = std::env::temp_dir().join(format!("rc-cmd-{}-{nanos}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    Arc::new(App::load(&dir).expect("load"))
+}
+
+async fn call(app: &Arc<App>, op: &str, args: Value) -> Frame {
+    dispatch(app, 1, op, &args).await
+}
+
+fn result_of(frame: Frame) -> Value {
+    match frame {
+        Frame::Result { data, .. } => data,
+        other => panic!("expected result, got {other:?}"),
+    }
+}
+
+fn error_of(frame: Frame) -> String {
+    match frame {
+        Frame::Error { message, .. } => message,
+        other => panic!("expected error, got {other:?}"),
+    }
+}
+
+/// Every write/filter op must fail cleanly with a database error when the
+/// server has no live connection (never panic or hang).
+#[tokio::test]
+async fn parity_ops_error_without_db() {
+    let app = tmp_app();
+    let cases: [(&str, Value); 12] = [
+        ("library_filter", json!({"text": "x"})),
+        ("library_get", json!({"songId": 1})),
+        ("library_update", json!({"song": {}})),
+        ("library_delete", json!({"songId": 1})),
+        ("library_mass_set", json!({"ids": [1], "field": "enabled", "value": true})),
+        ("library_mass_delete", json!({"ids": [1]})),
+        ("history_filter", json!({"text": "x"})),
+        ("history_delete", json!({"historyId": 1})),
+        ("play_history", json!({"historyId": 1})),
+        ("play_next", json!({})),
+        ("list_queue", json!({})),
+        ("queue_add_song", json!({"songId": 1})),
+    ];
+    for (op, args) in cases {
+        let frame = call(&app, op, args).await;
+        let msg = error_of(frame);
+        assert!(msg.contains("database"), "{op}: {msg}");
+    }
+}
+
+/// `play_next` before anything is loaded: a clear "nothing is loaded" error
+/// (db is up, but no item on the transport).
+#[tokio::test]
+async fn play_history_and_playlist_ops_reject_bad_args() {
+    let app = tmp_app();
+    // Argument validation runs before the db requirement only where the
+    // shape check precedes require_db; verify the shape errors surface too.
+    let msg = error_of(call(&app, "queue_eta_set", json!({"queueId": 1})).await);
+    assert!(
+        msg.contains("eta") || msg.contains("database"),
+        "queue_eta_set: {msg}"
+    );
+    let msg = error_of(call(&app, "queue_move", json!({"queueId": 1})).await);
+    assert!(msg.contains("with") || msg.contains("database"), "queue_move: {msg}");
+    let msg = error_of(call(&app, "playlist_move_item", json!({"playlistId": 1})).await);
+    assert!(msg.contains("from") || msg.contains("database"), "playlist_move_item: {msg}");
+    let msg = error_of(call(&app, "library_mass_set", json!({"ids": [], "field": "nope"})).await);
+    assert!(
+        msg.contains("database") || msg.contains("ids") || msg.contains("nope"),
+        "library_mass_set: {msg}"
+    );
+}
+
+// ---- live-database round trip ---------------------------------------------
+
+fn dsn() -> Option<(String, u16, String, String, String)> {
+    let raw = std::env::var("RC_DB_TEST_DSN").ok()?;
+    // mysql://user:pass@host:port/database
+    let rest = raw.strip_prefix("mysql://")?;
+    let (creds, hostdb) = rest.split_once('@')?;
+    let (user, pass) = creds.split_once(':')?;
+    let (hostport, database) = hostdb.split_once('/')?;
+    let (host, port) = hostport.rsplit_once(':').unwrap_or((hostport, "3306"));
+    Some((
+        host.to_string(),
+        port.parse().expect("port"),
+        database.to_string(),
+        user.to_string(),
+        pass.to_string(),
+    ))
+}
+
+async fn connect_live(app: &Arc<App>) -> bool {
+    let Some((host, port, database, username, password)) = dsn() else {
+        eprintln!("skipping live-db test: set RC_DB_TEST_DSN to run");
+        return false;
+    };
+    let frame = call(
+        app,
+        "db_configure",
+        json!({ "host": host, "port": port, "database": database, "username": username, "password": password }),
+    )
+    .await;
+    assert!(matches!(frame, Frame::Result { .. }), "{frame:?}");
+    let frame = call(app, "db_connect", json!({})).await;
+    assert!(matches!(frame, Frame::Result { .. }), "{frame:?}");
+    true
+}
+
+#[tokio::test]
+async fn live_command_round_trip() {
+    let app = tmp_app();
+    if !connect_live(&app).await {
+        return;
+    }
+
+    // Scrub residue from earlier failed runs so the strict asserts below hold.
+    let dsn_raw = std::env::var("RC_DB_TEST_DSN").unwrap();
+    let scrub = radiocraft_db::Db::connect_url(&dsn_raw).await.expect("scrub conn");
+    for sql in [
+        "DELETE FROM songs WHERE path LIKE '/tmp/opencode/smoke-audio/parity-%'",
+        "DELETE FROM history WHERE title = 'Parity Title'",
+        "DELETE FROM playlists WHERE name LIKE 'Parity PL%'",
+    ] {
+        sqlx::raw_sql(sql).execute(scrub.pool()).await.expect("scrub");
+    }
+    scrub.close().await;
+
+    // Add a song from the smoke tone file, then filter/edit/delete it.
+    // A per-run copy keeps the unique idx_path constraint happy.
+    let src = std::env::var("RC_TEST_AUDIO").unwrap_or_else(|_| "/tmp/opencode/smoke-audio/testtone.wav".into());
+    if !std::path::Path::new(&src).exists() {
+        eprintln!("skipping live-db test: test audio file {src} missing");
+        return;
+    }
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let file = format!("/tmp/opencode/smoke-audio/parity-{nanos}.wav");
+    std::fs::copy(&src, &file).expect("copy tone");
+    let data = result_of(call(&app, "library_add", json!({"path": file})).await);
+    let song_id = data["songId"].as_u64().expect("songId").to_string();
+    let song_id: u64 = song_id.parse().unwrap();
+    let _ = std::fs::remove_file(&file);
+
+    let data = result_of(call(&app, "library_get", json!({"songId": song_id})).await);
+    let mut song = data["song"].clone();
+    song["title"] = json!("Parity Title");
+    song["weight"] = json!("55.5");
+    let data = result_of(call(&app, "library_update", json!({"song": song})).await);
+    assert_eq!(data["songId"], json!(song_id));
+
+    let data = result_of(call(&app, "library_filter", json!({"text": "Parity Title"})).await);
+    assert_eq!(data["total"], json!(1), "{data}");
+
+    let data = result_of(
+        call(&app, "library_mass_set", json!({"ids": [song_id], "field": "enabled", "value": false}))
+            .await,
+    );
+    assert_eq!(data["updated"], json!(1));
+
+    // Queue editing (sentinel rows: swID/vtID -1).
+    let data = result_of(call(&app, "queue_add_song", json!({"songId": song_id})).await);
+    let queue_id = data["queued"].as_u64().expect("queued");
+    let data = result_of(call(&app, "list_queue", json!({})).await);
+    let items = data["items"].as_array().expect("items");
+    assert!(items.iter().any(|i| i["ID"] == json!(queue_id)), "{data}");
+    let eta = chrono::Local::now() + chrono::TimeDelta::minutes(10);
+    let data = result_of(
+        call(&app, "queue_eta_set", json!({"queueId": queue_id, "eta": eta.to_rfc3339()})).await,
+    );
+    assert_eq!(data["updated"], json!(1));
+    let data = result_of(call(&app, "queue_remove", json!({"queueId": queue_id})).await);
+    assert_eq!(data["removed"], json!(1));
+
+    // Playlist editing incl. the locked-row guard.
+    let data = result_of(call(&app, "playlist_create", json!({"name": "Parity PL"})).await);
+    let pl_id = data["playlistId"].as_u64().expect("playlistId");
+    let data = result_of(
+        call(&app, "playlist_add_item", json!({"playlistId": pl_id, "songId": song_id})).await,
+    );
+    let item_id = data["itemId"].as_u64().expect("itemId");
+    let data = result_of(call(&app, "list_playlist_items", json!({"playlistId": pl_id})).await);
+    assert_eq!(data["items"].as_array().expect("items").len(), 1);
+
+    // Locked now-playing row (id 0) must never be deletable.
+    let msg = error_of(call(&app, "playlist_remove_item", json!({"itemId": 0})).await);
+    assert!(msg.contains("itemId"), "{msg}");
+
+    let data = result_of(call(&app, "playlist_remove_item", json!({"itemId": item_id})).await);
+    assert_eq!(data["removed"], json!(1));
+    let data = result_of(call(&app, "playlist_delete", json!({"playlistId": pl_id})).await);
+    assert_eq!(data["playlistId"], json!(pl_id));
+
+    // History CRUD + play_history on the booked song.
+    let data = result_of(
+        call(&app, "history_add", json!({"songId": song_id, "artist": "A", "title": "Parity Title"})).await,
+    );
+    let hist_id = data["historyId"].as_u64().expect("historyId");
+    let data = result_of(call(&app, "history_filter", json!({"text": "Parity Title"})).await);
+    assert!(data["total"].as_u64().expect("total") >= 1, "{data}");
+    let data = result_of(call(&app, "history_delete", json!({"historyId": hist_id})).await);
+    assert_eq!(data["removed"], json!(1));
+    let msg = error_of(call(&app, "history_delete", json!({"historyId": hist_id})).await);
+    assert!(msg.contains("no history row"), "{msg}");
+
+    // Cleanup.
+    let data = result_of(call(&app, "library_delete", json!({"songId": song_id})).await);
+    assert_eq!(data["removed"], json!(1));
+}

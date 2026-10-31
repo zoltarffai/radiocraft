@@ -199,16 +199,11 @@ pub fn new_song_from_path(path: &Path) -> Result<NewSong> {
     Ok(NewSong {
         path: path.display().to_string(),
         song_type: 3, // music, the RadioDJ default for added files
-        id_subcat: 0,
-        id_genre: 0,
         artist,
-        original_artist: String::new(),
         title,
-        album: String::new(),
         duration: dec,
         original_duration: dec,
-        enabled: true,
-        weight: Decimal::from(16),
+        ..NewSong::default()
     })
 }
 

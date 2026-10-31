@@ -232,6 +232,7 @@ async fn run(app: &Arc<App>, op: &str, args: &Value) -> Result<Value> {
                 original_duration: decimal_from_f64(duration),
                 enabled: true,
                 weight: arg_decimal(args, "weight", Decimal::from(100)),
+                ..NewSong::default()
             };
             let id = radiocraft_db::entities::insert_song(db.pool(), &song).await?;
             Ok(json!({ "songId": id, "artist": artist, "title": title }))

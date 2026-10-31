@@ -31,3 +31,4 @@ rust_decimal.workspace = true
 [dev-dependencies]
 axum-test = { version = "21", features = ["ws"] }
 tokio-tungstenite = "0.24"
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "mysql"] }
