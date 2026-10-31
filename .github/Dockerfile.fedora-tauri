@@ -1,0 +1,24 @@
+FROM docker.io/library/fedora:44
+
+RUN dnf -y install \
+      webkit2gtk4.1-devel \
+      gtk3-devel \
+      libappindicator-gtk3-devel \
+      librsvg2-devel \
+      alsa-lib-devel \
+      rust \
+      cargo \
+      cargo-clippy \
+      pkgconf \
+      openssl-devel \
+      gperf \
+      wget \
+      make \
+      cmake \
+      ninja \
+      gettext \
+      patch \
+      fontconfig \
+    && dnf clean all
+
+WORKDIR /src

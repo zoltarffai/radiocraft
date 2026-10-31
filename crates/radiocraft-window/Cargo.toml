@@ -1,0 +1,19 @@
+[package]
+name = "radiocraft-window"
+description = "Tauri window shell for the RadioCraft web UI: native window + tray, spawns the server as a sibling process"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+anyhow.workspace = true
+radiocraft-net = { workspace = true }
+radiocraft-settings = { workspace = true }
+tracing.workspace = true
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tauri = { version = "2", features = ["tray-icon"] }
+libc = "0.2"

@@ -12,6 +12,7 @@ pub mod http;
 pub mod playback;
 pub mod playlist;
 pub mod pump;
+pub mod run;
 pub mod state;
 pub mod ws;
 

@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 use anyhow::{Context as _, Result};
 
-use radiocraft_server::{http, pump, state::App};
+use radiocraft_server::{http, pump, run, state::App};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -24,30 +24,27 @@ async fn main() -> Result<()> {
 
     let config_dir = match std::env::args().nth(1) {
         Some(dir) => PathBuf::from(dir),
-        None => default_config_dir(),
+        None => run::default_config_dir(),
     };
     std::fs::create_dir_all(&config_dir).with_context(|| format!("{}", config_dir.display()))?;
     tracing::info!("config dir: {}", config_dir.display());
 
     let app = Arc::new(App::load(&config_dir).context("loading settings")?);
-    app.set_status(radiocraft_server::state::Status::info("Server starting")).await;
+    app.set_status(radiocraft_server::state::Status::info("Server starting"))
+        .await;
 
     // Engine pump thread: renders blocks into the sink so playback actually
     // advances. Safe because the engine lives inside this Arc and never moves.
     app.engine.start_pump();
 
     // Serve the built web UI when it exists next to the binary.
-    let web_dist = std::env::var("RADIOCRAFT_WEB_DIST")
-        .map(PathBuf::from)
-        .or_else(|_| {
-            let candidate = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../web/dist");
-            if candidate.exists() {
-                Ok(candidate)
-            } else {
-                Err(std::env::VarError::NotPresent)
-            }
-        })
-        .ok();
+    let web_dist = run::resolve_web_dist([
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../web/dist"),
+        match std::env::current_exe() {
+            Ok(exe) => exe.parent().unwrap().join("web/dist"),
+            Err(_) => std::path::PathBuf::from("web/dist"),
+        },
+    ]);
     if let Some(dist) = &web_dist {
         tracing::info!("serving web UI from {}", dist.display());
     }
@@ -71,15 +68,6 @@ async fn main() -> Result<()> {
         .await
         .context("serving")?;
     Ok(())
-}
-
-/// Default config dir: `$XDG_CONFIG_HOME/radiocraft` or `~/.config/radiocraft`.
-fn default_config_dir() -> PathBuf {
-    if let Ok(dir) = std::env::var("XDG_CONFIG_HOME") {
-        return PathBuf::from(dir).join("radiocraft");
-    }
-    let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
-    PathBuf::from(home).join(".config").join("radiocraft")
 }
 
 /// Wait for SIGINT/SIGTERM, then book the still-rolling item before exiting.
