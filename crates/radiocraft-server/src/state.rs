@@ -450,6 +450,11 @@ impl App {
     }
 
     /// Elapsed/remaining for the header, preferring the engine's own clock.
+    /// Read the current now-playing record (None when nothing is loaded).
+    pub fn current_now_playing(&self) -> Option<NowPlaying> {
+        self.now.read().expect("now lock").clone()
+    }
+
     pub fn now_playing_clock(&self, playing: &NowPlaying) -> (f64, f64) {
         let segment = if playing.cue_end > playing.cue_start {
             playing.segment_secs()

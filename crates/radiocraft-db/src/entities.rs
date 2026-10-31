@@ -10,7 +10,7 @@
 
 use chrono::{NaiveDate, NaiveDateTime};
 use rust_decimal::Decimal;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use sqlx::MySqlPool;
 
 use crate::error::Result;
@@ -28,7 +28,7 @@ fn placeholders(count: usize) -> String {
 // ---------------------------------------------------------------------------
 
 /// Full `songs` row.
-#[derive(Debug, Clone, Serialize, sqlx::FromRow)]
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
 pub struct Song {
     pub ID: u32,
     pub path: String,
@@ -177,6 +177,123 @@ pub async fn search_songs(pool: &MySqlPool, needle: &str, limit: i64) -> Result<
     .bind(limit)
     .fetch_all(pool)
     .await?)
+}
+
+/// Library grid filter (RadioDJ's `GetSongsForDataGridview`): free-text
+/// LIKE over artist/title/album plus id filters, a sort column and paging.
+#[derive(Debug, Clone, Default)]
+pub struct LibraryFilter {
+    /// Free text matched with `LIKE %text%` (empty = no constraint).
+    pub text: String,
+    /// `songs.id_cat` — `None`/`0` = all.
+    pub category: u32,
+    /// `songs.id_subcat` — `None`/`0` = all.
+    pub subcategory: u32,
+    /// `songs.id_genre` — `None`/`0` = all.
+    pub genre: u32,
+    /// `rotation_cmb.rotation_ID` matched through `id_subcat` — `0` = all.
+    pub rotation: u32,
+    /// `songs.enabled` — `None` = all.
+    pub enabled: Option<bool>,
+    pub order: LibrarySort,
+    pub limit: i64,
+    pub offset: i64,
+}
+
+/// Grid sort column (whitelisted so nothing untrusted reaches `ORDER BY`).
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub enum LibrarySort {
+    #[default]
+    Artist,
+    Title,
+    Album,
+    Duration,
+    Year,
+    Weight,
+    Count,
+}
+
+impl LibrarySort {
+    fn column(self) -> &'static str {
+        match self {
+            LibrarySort::Artist => "artist",
+            LibrarySort::Title => "title",
+            LibrarySort::Album => "album",
+            LibrarySort::Duration => "duration",
+            LibrarySort::Year => "`year`",
+            LibrarySort::Weight => "weight",
+            LibrarySort::Count => "count_played",
+        }
+    }
+}
+
+/// Filtered library page: `(total matching rows, page of songs)`.
+pub async fn filter_songs(
+    pool: &MySqlPool,
+    f: &LibraryFilter,
+) -> Result<(u64, Vec<Song>)> {
+    let mut where_sql = Vec::new();
+    if !f.text.is_empty() {
+        where_sql.push("(artist LIKE ? OR title LIKE ? OR album LIKE ?)".to_string());
+    }
+    if f.category != 0 {
+        where_sql.push("id_cat = ?".to_string());
+    }
+    if f.subcategory != 0 {
+        where_sql.push("id_subcat = ?".to_string());
+    }
+    if f.genre != 0 {
+        where_sql.push("id_genre = ?".to_string());
+    }
+    if f.rotation != 0 {
+        where_sql.push(
+            "id_subcat IN (SELECT item_ID FROM rotation_cmb WHERE rotation_ID = ?)".to_string(),
+        );
+    }
+    if let Some(enabled) = f.enabled {
+        where_sql.push(format!("enabled = {}", if enabled { 1 } else { 0 }));
+    }
+    let where_sql = if where_sql.is_empty() {
+        String::new()
+    } else {
+        format!(" WHERE {}", where_sql.join(" AND "))
+    };
+
+    let count_sql = format!("SELECT COUNT(*) FROM songs{where_sql}");
+    let page_sql = format!(
+        "SELECT * FROM songs{where_sql} ORDER BY {} LIMIT ? OFFSET ?",
+        f.order.column()
+    );
+
+    let mut page = sqlx::query_as::<_, Song>(&page_sql);
+    let mut count = sqlx::query_scalar::<_, i64>(&count_sql);
+    if !f.text.is_empty() {
+        let like = format!("%{}%", f.text);
+        page = page.bind(like.clone()).bind(like.clone()).bind(like.clone());
+        count = count.bind(like);
+    }
+    if f.category != 0 {
+        page = page.bind(f.category);
+        count = count.bind(f.category);
+    }
+    if f.subcategory != 0 {
+        page = page.bind(f.subcategory);
+        count = count.bind(f.subcategory);
+    }
+    if f.genre != 0 {
+        page = page.bind(f.genre);
+        count = count.bind(f.genre);
+    }
+    if f.rotation != 0 {
+        page = page.bind(f.rotation);
+        count = count.bind(f.rotation);
+    }
+    if let Some(enabled) = f.enabled {
+        page = page.bind(enabled);
+    }
+    let total: i64 = count.fetch_one(pool).await?;
+    let rows = page.bind(f.limit).bind(f.offset).fetch_all(pool).await?;
+    Ok((total as u64, rows))
 }
 
 /// Update every editable metadata column (booking timestamps are untouched).
@@ -827,6 +944,134 @@ pub async fn clear_playlist_items(pool: &MySqlPool, playlist_id: u32) -> Result<
         .rows_affected())
 }
 
+/// One `playlists_list` row by ID (no song join).
+pub async fn get_playlist_item(pool: &MySqlPool, id: u32) -> Result<Option<PlaylistItem>> {
+    Ok(sqlx::query_as::<_, PlaylistItem>("SELECT * FROM playlists_list WHERE ID = ?")
+        .bind(id)
+        .fetch_optional(pool)
+        .await?)
+}
+
+/// One `playlists_list` row by ID with its library columns resolved.
+pub async fn get_playlist_item_with_song(
+    pool: &MySqlPool,
+    id: u32,
+) -> Result<Option<PlaylistItemRow>> {
+    Ok(sqlx::query_as::<_, PlaylistItemRow>(
+        "SELECT pl.ID, pl.pID, pl.sID, pl.cstart, pl.cnext, pl.cend, pl.fin, pl.fout, \
+         pl.swID, pl.swplay, pl.vtID, pl.vtplay, pl.swfirst, pl.ord, \
+         s.artist, s.title, s.path \
+         FROM playlists_list pl LEFT JOIN songs s ON s.ID = pl.sID WHERE pl.ID = ?",
+    )
+    .bind(id)
+    .fetch_optional(pool)
+    .await?)
+}
+
+/// Append a song to a playlist at the end; cue columns zero = RadioDJ
+/// "not set", matching the shell's `item_for_song` convention.
+pub async fn append_playlist_song(
+    pool: &MySqlPool,
+    playlist_id: u32,
+    song_id: i32,
+) -> Result<u32> {
+    let mut conn = pool.acquire().await?;
+    let max_ord: i64 = sqlx::query_scalar("SELECT COALESCE(MAX(ord), 0) FROM playlists_list WHERE pID = ?")
+        .bind(playlist_id)
+        .fetch_one(&mut *conn)
+        .await?;
+    let item = NewPlaylistItem {
+        pID: playlist_id,
+        sID: song_id,
+        cstart: Decimal::ZERO,
+        cnext: Decimal::ZERO,
+        cend: Decimal::ZERO,
+        fin: Decimal::ZERO,
+        fout: Decimal::ZERO,
+        swID: 0,
+        swplay: Decimal::ZERO,
+        vtID: 0,
+        vtplay: Decimal::ZERO,
+        swfirst: false,
+        ord: (max_ord + 1) as u32,
+    };
+    insert_playlist_item(pool, &item).await
+}
+
+/// Rewrite the row's cue/fade columns (values in RadioDJ units:
+/// `cnext`/`fin` are half-seconds like the grid).
+pub async fn update_playlist_item_cues(
+    pool: &MySqlPool,
+    id: u32,
+    cstart: Decimal,
+    cnext: Decimal,
+    cend: Decimal,
+    fin: Decimal,
+    fout: Decimal,
+) -> Result<u64> {
+    Ok(sqlx::query("UPDATE playlists_list SET cstart = ?, cnext = ?, cend = ?, fin = ?, fout = ? WHERE ID = ?")
+        .bind(cstart)
+        .bind(cnext)
+        .bind(cend)
+        .bind(fin)
+        .bind(fout)
+        .bind(id)
+        .execute(pool)
+        .await?
+        .rows_affected())
+}
+
+/// Point the row at a different library song (edit-in-place replace).
+pub async fn set_playlist_item_song(pool: &MySqlPool, id: u32, song_id: i32) -> Result<u64> {
+    Ok(sqlx::query("UPDATE playlists_list SET sID = ? WHERE ID = ?")
+        .bind(song_id)
+        .bind(id)
+        .execute(pool)
+        .await?
+        .rows_affected())
+}
+
+/// Set one row's `ord` (move-to-position; callers reindex around it).
+pub async fn set_playlist_item_ord(pool: &MySqlPool, id: u32, ord: u32) -> Result<u64> {
+    Ok(sqlx::query("UPDATE playlists_list SET ord = ? WHERE ID = ?")
+        .bind(ord)
+        .bind(id)
+        .execute(pool)
+        .await?
+        .rows_affected())
+}
+
+/// Swap two rows' `ord` values (single statement, both rows must exist).
+pub async fn swap_playlist_item_ords(pool: &MySqlPool, a: u32, b: u32) -> Result<u64> {
+    Ok(sqlx::query(
+        "UPDATE playlists_list p1 JOIN playlists_list p2 ON p1.ID = ? AND p2.ID = ? \
+         SET p1.ord = p2.ord, p2.ord = p1.ord",
+    )
+    .bind(a)
+    .bind(b)
+    .execute(pool)
+    .await?
+    .rows_affected())
+}
+
+/// Rewrite `ord` for these row IDs to 1..=ids.len(), in the given order.
+pub async fn reindex_playlist_items(
+    pool: &MySqlPool,
+    ids: &[u32],
+) -> Result<u64> {
+    let mut conn = pool.acquire().await?;
+    let mut touched = 0u64;
+    for (i, id) in ids.iter().enumerate() {
+        touched += sqlx::query("UPDATE playlists_list SET ord = ? WHERE ID = ?")
+            .bind((i + 1) as u32)
+            .bind(id)
+            .execute(&mut *conn)
+            .await?
+            .rows_affected();
+    }
+    Ok(touched)
+}
+
 // ---------------------------------------------------------------------------
 // events + event categories
 // ---------------------------------------------------------------------------
@@ -1100,6 +1345,79 @@ pub async fn clear_history(pool: &MySqlPool) -> Result<u64> {
     Ok(sqlx::query("DELETE FROM history").execute(pool).await?.rows_affected())
 }
 
+/// One `history` row by ID (restore lookups).
+pub async fn get_history_entry(pool: &MySqlPool, id: u32) -> Result<Option<HistoryEntry>> {
+    Ok(sqlx::query_as::<_, HistoryEntry>(&format!(
+        "SELECT {HISTORY_COLUMNS} FROM history WHERE ID = ?"
+    ))
+    .bind(id)
+    .fetch_optional(pool)
+    .await?)
+}
+
+/// Remove one history row (user deletes from the history grid).
+pub async fn delete_history_row(pool: &MySqlPool, id: u32) -> Result<u64> {
+    Ok(sqlx::query("DELETE FROM history WHERE ID = ?")
+        .bind(id)
+        .execute(pool)
+        .await?
+        .rows_affected())
+}
+
+/// History grid filter: free-text LIKE over artist/title, paged.
+/// Returns `(total matching rows, page)`.
+pub async fn filter_history(
+    pool: &MySqlPool,
+    text: &str,
+    limit: i64,
+    offset: i64,
+) -> Result<(u64, Vec<HistoryEntry>)> {
+    let where_sql = if text.is_empty() {
+        String::new()
+    } else {
+        " WHERE (artist LIKE ? OR title LIKE ?)".to_string()
+    };
+    let count_sql = format!("SELECT COUNT(*) FROM history{where_sql}");
+    let page_sql = format!(
+        "SELECT {HISTORY_COLUMNS} FROM history{where_sql} ORDER BY date_played DESC, ID DESC LIMIT ? OFFSET ?"
+    );
+    let mut count = sqlx::query_scalar::<_, i64>(&count_sql);
+    let mut page = sqlx::query_as::<_, HistoryEntry>(&page_sql);
+    if !text.is_empty() {
+        let like = format!("%{text}%");
+        count = count.bind(like.clone());
+        page = page.bind(like.clone()).bind(like);
+    }
+    let total: i64 = count.fetch_one(pool).await?;
+    let rows = page.bind(limit).bind(offset).fetch_all(pool).await?;
+    Ok((total as u64, rows))
+}
+
+/// Re-add a play to the library: mirror the procedure's history INSERT … SELECT
+/// from the live `songs` row, then return the new history ID. RadioDJ's
+/// history-window restore re-books a song that was deleted from the library;
+/// `song_type` comes from the history row (0 = music, 9 = request).
+pub async fn add_history_row(
+    pool: &MySqlPool,
+    song_id: u32,
+    song_type: i32,
+    cur_artist: &str,
+    cur_title: &str,
+) -> Result<u32> {
+    let mut conn = pool.acquire().await?;
+    sqlx::query(crate::booking::SQL_HISTORY_INSERT)
+        .bind(song_id)
+        .bind(song_type)
+        .bind(cur_artist)
+        .bind(cur_title)
+        .bind(Option::<i64>::None)
+        .bind(song_id)
+        .execute(&mut *conn)
+        .await?;
+    let id: i64 = sqlx::query_scalar("SELECT LAST_INSERT_ID()").fetch_one(&mut *conn).await?;
+    Ok(id as u32)
+}
+
 // ---------------------------------------------------------------------------
 // current/now-playing state (derived: no `nowplaying` table exists)
 // ---------------------------------------------------------------------------
@@ -1186,6 +1504,74 @@ pub async fn delete_queue_item(pool: &MySqlPool, id: u32) -> Result<u64> {
 
 pub async fn clear_queue(pool: &MySqlPool) -> Result<u64> {
     Ok(sqlx::query("DELETE FROM queuelist").execute(pool).await?.rows_affected())
+}
+
+/// One `queuelist` row by ID.
+pub async fn get_queue_item(pool: &MySqlPool, id: u32) -> Result<Option<QueueItem>> {
+    Ok(sqlx::query_as::<_, QueueItem>("SELECT * FROM queuelist WHERE ID = ?")
+        .bind(id)
+        .fetch_optional(pool)
+        .await?)
+}
+
+/// Number of scheduled rows + last-playable count (both from `queuelist`).
+pub async fn queue_counts(pool: &MySqlPool) -> Result<(u64, u64)> {
+    let scheduled: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM queuelist")
+        .fetch_one(pool)
+        .await?;
+    let playable: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM queuelist WHERE ETA IS NOT NULL AND ETA <= NOW() + INTERVAL 10 SECOND",
+    )
+    .fetch_one(pool)
+    .await?;
+    Ok((scheduled as u64, playable as u64))
+}
+
+/// Latest ETA in the schedule (`None` when empty) — the anchor for "append now".
+pub async fn max_queue_eta(pool: &MySqlPool) -> Result<Option<NaiveDateTime>> {
+    Ok(sqlx::query_scalar("SELECT MAX(ETA) FROM queuelist").fetch_one(pool).await?)
+}
+
+/// Re-queue a library song at the current instant; cue columns zero like
+/// `add_to_queue`, but with the row still present (play_next takes over).
+pub async fn requeue_song(pool: &MySqlPool, s: &Song) -> Result<u32> {
+    let item = NewQueueItem {
+        songID: s.ID as i32,
+        ETA: Some(chrono::Local::now().naive_local()),
+        duration: s.duration,
+        artist: s.artist.clone(),
+        associated_artists: s.associated_artists.clone(),
+        title: s.title.clone(),
+        album: s.album.clone(),
+        swID: 0,
+        swPlay: Decimal::ZERO,
+        vtID: 0,
+        vtPlay: Decimal::ZERO,
+    };
+    enqueue(pool, &item).await
+}
+
+/// Move a queued row to a new scheduled time (drag-to-time / move up/down).
+pub async fn set_queue_item_eta(pool: &MySqlPool, id: u32, eta: NaiveDateTime) -> Result<u64> {
+    Ok(sqlx::query("UPDATE queuelist SET ETA = ? WHERE ID = ?")
+        .bind(eta)
+        .bind(id)
+        .execute(pool)
+        .await?
+        .rows_affected())
+}
+
+/// Swap two rows' `ETA` values (adjacent move: the grid orders by ETA).
+pub async fn swap_queue_item_etas(pool: &MySqlPool, a: u32, b: u32) -> Result<u64> {
+    Ok(sqlx::query(
+        "UPDATE queuelist q1 JOIN queuelist q2 ON q1.ID = ? AND q2.ID = ? \
+         SET q1.ETA = q2.ETA, q2.ETA = q1.ETA",
+    )
+    .bind(a)
+    .bind(b)
+    .execute(pool)
+    .await?
+    .rows_affected())
 }
 
 // ---------------------------------------------------------------------------
