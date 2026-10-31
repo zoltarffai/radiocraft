@@ -195,17 +195,24 @@ AutoDJ is now wired end-to-end: `radiocraft-db::autodj` executes rotation criter
 (two-phase pool fetch), the pump auto-fills the main zone on idle (5 s backoff), and the
 web UI has an AutoDJ panel (toggle, knobs, plan preview, play-next). Ops: `autodj_set` /
 `autodj_status` / `autodj_plan` / `autodj_play_next`; the switch persists as the
-`AutoDJStart` general setting. Rotation/criteria *editors* in the web UI are still open.
+`AutoDJStart` general setting.
+
+Rotation/criteria editors are now closed too: backend ops in `radiocraft-server/src/
+rotations.rs` (`list_rotations` / `rotation_create` / `rotation_rename` / `rotation_delete` /
+`list_criteria` / `criteria_add` / `criteria_update` / `criteria_delete` / `list_lookup`) with
+merge-patch semantics on `criteria_update` and full core `RotationCriteria` JSON stored in
+`rotations_list.data`; web panel `web/src/lib/RotationEditor.svelte` (rotation CRUD + rule
+editor: category/subcategory/genre pickers with include/exclude polarity, day mask, daypart
+times, weight floor, four repeat intervals, selection mode, duplicate). Live WS smoke:
+`/tmp/opencode/rc-rotation-smoke.mjs`.
 
 Still open:
 
-1. Rotation/criteria editors in the web UI (CRUD over `rotations_list`/`criteria`; the DB
-   executor already round-trips full core `RotationCriteria` JSON in `rotations_list.data`).
-2. Settings editors (sound device, scheduler, now-playing export config).
-3. REST mirrors for the new parity ops (currently WS-only; REST keeps the read-only set).
-4. Packaging for the shell: `cargo tauri build` deb/rpm job (bundle config already in
+1. Settings editors (sound device, scheduler, now-playing export config).
+2. REST mirrors for the new parity ops (currently WS-only; REST keeps the read-only set).
+3. Packaging for the shell: `cargo tauri build` deb/rpm job (bundle config already in
    `tauri.conf.json`: targets deb/rpm, identifier `dev.radiocraft.window`).
-5. Cosmetic: on shell exit two benign GTK teardown warnings (appindicator known quirk) +
+4. Cosmetic: on shell exit two benign GTK teardown warnings (appindicator known quirk) +
    libayatana deprecation warning — harmless.
 
 Deferred fidelity checks (optional): cross-check `LoudnessCalculator.cs`, Plugin_SoundProcessing
@@ -230,7 +237,10 @@ FX keys against decompiles.
   radiocraft; xdotool windowclose $W"` (xauth file name under `/run/user/1000/` rotates).
   Screenshot attempts failed (`magick import` unusable, `spectacle -rbn` non-interactive
   hangs); verify via `ss -tnp state established '( dport = :8030 )'` instead.
-- WS CLI smoke: `python3` one-liners against the wire (remember `args` nesting).
+- WS CLI smoke: `python3` one-liners against the wire (remember `args` nesting). Node
+  scripts: `/tmp/opencode/rc-autodj-smoke.mjs` (AutoDJ ops) and
+  `/tmp/opencode/rc-rotation-smoke.mjs` (rotation/criteria editor round trip incl.
+  merge-patch check; creates and deletes its own `Smoke RotEditor <ts>` rotation).
 - Live-DB integration test (scratch DB `radiocraft_test` on the same MariaDB; schema
   auto-bootstraps on connect): `RC_DB_TEST_DSN="mysql://root:changeme@127.0.0.1:3306/
   radiocraft_test" cargo test -p radiocraft-server --test commands`. Test tone copies are

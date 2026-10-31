@@ -10,15 +10,18 @@ import type {
   CartHeader,
   CartNowInfo,
   ClientMsg,
+  CriteriaRow,
   DbConfigView,
   Frame,
   HistoryRow,
   LevelInfo,
   LibraryFilterArgs,
+  LookupSet,
   NowInfo,
   PlaylistHeader,
   PlaylistItemRow,
   QueueRow,
+  RotationHeader,
   SchedulerConfig,
   SongFull,
   SongRow,
@@ -82,6 +85,11 @@ class Session {
   autodjEnabled = $state(false);
   autodjLastPick = $state<number | null>(null);
   autodjConfig = $state<SchedulerConfig | null>(null);
+
+  // Rotation editor state (list_rotations / list_criteria / list_lookup).
+  rotations = $state<RotationHeader[]>([]);
+  criteria = $state<CriteriaRow[]>([]);
+  lookups = $state<LookupSet>({ categories: [], subcategories: [], genres: [] });
   /** Last autodj_plan dry-run payload, shown by the AutoDJ panel. */
   autodjPlan = $state<AutodjPlan | null>(null);
 
@@ -339,6 +347,46 @@ class Session {
     const r = await this.cmd<{ plan: AutodjPlan }>("autodj_play_next");
     this.autodjPlan = r.plan;
     this.autodjLastPick = r.plan.lastPickSongId ?? null;
+  }
+
+  // ---- rotation editor ops ----------------------------------------------------
+
+  async loadRotations(): Promise<void> {
+    const r = await this.cmd<{ rotations: RotationHeader[] }>("list_rotations");
+    this.rotations = r.rotations ?? [];
+  }
+  async createRotation(name: string): Promise<number> {
+    const r = await this.cmd<{ rotationId: number }>("rotation_create", { name });
+    return r.rotationId;
+  }
+  renameRotation(rotationId: number, name: string): Promise<unknown> {
+    return this.cmd("rotation_rename", { rotationId, name });
+  }
+  deleteRotation(rotationId: number): Promise<unknown> {
+    return this.cmd("rotation_delete", { rotationId });
+  }
+  async loadCriteria(rotationId: number): Promise<void> {
+    const r = await this.cmd<{ criteria: CriteriaRow[] }>("list_criteria", { rotationId });
+    this.criteria = r.criteria ?? [];
+  }
+  async criteriaAdd(rotationId: number, criteria: Partial<CriteriaRow>): Promise<number> {
+    const r = await this.cmd<{ criteriaId: number }>("criteria_add", { rotationId, criteria });
+    return r.criteriaId;
+  }
+  /** Patch is merged onto the stored row server-side; `id` selects the row. */
+  criteriaUpdate(criteria: { id: number } & Partial<CriteriaRow>): Promise<unknown> {
+    return this.cmd("criteria_update", { criteria });
+  }
+  criteriaDelete(criteriaId: number): Promise<unknown> {
+    return this.cmd("criteria_delete", { criteriaId });
+  }
+  async loadLookups(): Promise<void> {
+    const r = await this.cmd<LookupSet>("list_lookup");
+    this.lookups = {
+      categories: r.categories ?? [],
+      subcategories: r.subcategories ?? [],
+      genres: r.genres ?? [],
+    };
   }
 
   // ---- play queue ops ---------------------------------------------------------

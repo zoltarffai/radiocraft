@@ -10,6 +10,7 @@
   import QueuePanel from "./lib/QueuePanel.svelte";
   import PlaylistEditor from "./lib/PlaylistEditor.svelte";
   import AutoDJPanel from "./lib/AutoDJPanel.svelte";
+  import RotationEditor from "./lib/RotationEditor.svelte";
 
   onMount(() => {
     session.start();
@@ -45,6 +46,7 @@
     <section class="col wide"><CartWall /></section>
     <section class="col wide"><QueuePanel /></section>
     <section class="col wide"><PlaylistEditor /></section>
+    <section class="col wide"><RotationEditor /></section>
     <section class="col wide"><HistoryPanel /></section>
   </main>
 

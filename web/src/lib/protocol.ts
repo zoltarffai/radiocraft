@@ -291,6 +291,63 @@ export interface AutodjPlan {
   lastPickSongId: number | null;
 }
 
+/** `list_rotations` row. */
+export interface RotationHeader {
+  ID: number;
+  name: string;
+}
+
+/** `list_lookup` picker row (category/subcategory/genre). */
+export interface LookupRow {
+  ID: number;
+  name: string;
+  parentid?: number;
+}
+
+/** `list_lookup` payload. */
+export interface LookupSet {
+  categories: LookupRow[];
+  subcategories: LookupRow[];
+  genres: LookupRow[];
+}
+
+export type CategoryPolarity = "Exclude" | "Include";
+
+/** Scheduler ordering strategy (`SelectionMode`). */
+export type SelectionMode = "Weight" | "LeastPlayed" | "Oldest" | "Newest" | "Random";
+
+/**
+ * One rotation rule line, the full core `RotationCriteria` shape as carried
+ * in `rotations_list.data`. `*_id = 0` means "any"; times are "HH:MM:SS"
+ * (daypart `null` = all day); `days` is a bitmask, bit 0 = Sunday, 127 = all.
+ */
+export interface CriteriaRow {
+  id: number;
+  rotation_id: number;
+  name: string;
+  enabled: boolean;
+  category_id: number;
+  category_type: CategoryPolarity;
+  subcategory_id: number;
+  subcategory_type: CategoryPolarity;
+  genre_id: number;
+  weight_min: number;
+  repeat_track_interval: number;
+  repeat_artist_interval: number;
+  repeat_title_interval: number;
+  repeat_album_interval: number;
+  time_start: string | null;
+  time_end: string | null;
+  days: number;
+  language: string | null;
+  mood: string | null;
+  gender: string | null;
+  selection: SelectionMode;
+  /** 0 = never repeat the same track back-to-back. */
+  repeat_rule: number;
+  ord: number;
+}
+
 export interface DbConfigView {
   host: string;
   port: number;
