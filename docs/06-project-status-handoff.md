@@ -26,7 +26,7 @@ Recreate **RadioDJ v3.0.0.5** (Windows/.NET 4.8 radio playout app) as
   with the same UI code: a native Tauri window and a plain browser mode. v0.2 is now
   feature-complete (milestones below); "all features of RadioDJ" remains the long-term goal.
 
-## 2. Current state (as of `717c412`)
+## 2. Current state (as of `0904464`)
 
 Everything is committed; working tree clean. All tests green, clippy `-D warnings` clean
 for every crate except `radiocraft-window` on the host (see §7 for the exclude rule).
@@ -40,7 +40,7 @@ for every crate except `radiocraft-window` on the host (see §7 for the exclude 
 | egui `radiocraft-app` retired, logic migrated | ✅ | `10707cf` |
 | 4. Tauri window shell + tray; close policy | ✅ | `717c412` |
 | 5. LAN/token auth mode | ✅ verified live | (token mode predates `717c412`) |
-| 3. Library/playlist/history window parity | ⚠ partial | — see §8 gaps |
+| 3. Library/playlist/history window parity | ✅ | `24a20e9`, `d5f72d9`, `0904464` |
 
 Verified live (desktop session): window opens against live server + MariaDB; play → booking
 written to `history`+`songs`; close→tray honors `MinimizeToTray=True`; close with `False`
@@ -100,10 +100,25 @@ WS frames (JSON): server sends `{"t":"ready"}` first. Client (optional) `{"t":"h
 `args`**. Errors: `{"code":"unauthorized"}` closes socket. There is **no `get_zonestate`**
 op — state is pushed. `sub`-gated pushes only.
 
-Ops (dispatch.rs, 25): `play pause resume stop stop_all stop_at seek segue_now cue
+Ops (dispatch.rs, 54): `play pause resume stop stop_all stop_at seek segue_now cue
 get_setting set_setting set_zone_fader_db set_zone_muted set_master_db get_db_config
 db_configure db_connect list_songs search_songs list_playlists list_playlist_items
-list_carts list_cart_buttons list_history`.
+list_carts list_cart_buttons list_history` — plus the milestone-3 parity set:
+library `library_filter library_get library_add library_update library_delete
+library_mass_set library_mass_delete`; history `history_filter history_add history_delete
+play_history` (rewind = re-add to library, returns `{"restored":id}`); playlists
+`playlist_create playlist_rename playlist_delete playlist_add_item playlist_remove_item
+playlist_move_item playlist_set_cues playlist_set_song`; queue
+`list_queue queue_add_song queue_add_file queue_remove queue_clear queue_eta_set
+queue_move` (ETA swap, args `{queueId,with}`); transport extra `play_next`.
+
+Key result shapes: `{songs}`, `{total,songs}`, `{history}`, `{total,history}`,
+`{playlists}`, `{items}`, `{playlistId}`, `{song}`, `{songId}`, `{itemId}`, `{queued}`,
+`{restored}`, `{updated}`, `{removed}`. `playlist_remove_item` refuses itemId 0
+(locked now-playing row); `playlist_move_item` uses 1-based `{from,to}` then reindexes;
+`queue_add_file` uses sentinel `swID:-1`/`vtID:-1`; `queue_eta_set` eta accepts RFC3339
+or local `YYYY-MM-DD HH:MM:SS`. `queuelist` has no cue/fade columns — queue edits are
+ETA/order/swap only.
 
 REST mirrors: `/api/state`, `/api/songs`, `/api/playlists`, `/api/playlists/{id}/items`,
 `/api/carts`, `/api/carts/{id}/buttons`, `/api/history`.
@@ -154,22 +169,23 @@ RadioDJ `cue_times` DB string: `&sta= &int= &pin=/&pou= &hin=/&hou= &out= &xta= 
 
 ## 8. Remaining work / known gaps
 
-v0.2 milestone 3 (UI surface parity) is the open item. Concretely missing:
+Milestone 3 (UI surface parity) is closed: library filter/sort/paging + edit form +
+mass-select ops, playlist editing (create/rename/delete/add/remove/move/cues), queue
+panel (add/remove/clear/ETA/swap), history window (filter/delete/rewing play,
+`play_history`), `play_next`. Covered end-to-end by `crates/radiocraft-server/tests/
+commands.rs` (offline op-surface tests + live-DB round trip gated on `RC_DB_TEST_DSN`,
+see §9).
 
-1. **Playlist edit ops** — no write ops yet (`add/remove/move/reorder queue & playlist
-   items`, save/load playlist). Helpers exist in `radiocraft-server/src/playlist.rs`
-   (used for reads); port the edit semantics from decompiled C# (e.g. `NowPlaying.cs`,
-   `Playlist.cs`) then add ops to `dispatch.rs` + REST mirrors + client store.
-2. **Library window parity** — search filter fields, sort, paging exist partially;
-   missing: edit song, categories/advanced search UI, mass-select ops.
-3. **History window parity** — `list_history` exists; missing filters/restore-item.
-4. **Cart wall interaction** — buttons listed; playing a cart button not wired (use
+Still open:
+
+1. **Cart wall interaction** — buttons listed; playing a cart button not wired (use
    `track_type` 12 semantics from core).
-5. AutoDJ exposure over WS (scheduler is implemented in core but not surface-driven).
-6. Settings editors (sound device, scheduler, now-playing export config).
-7. Packaging for the shell: `cargo tauri build` deb/rpm job (bundle config already in
+2. AutoDJ exposure over WS (scheduler is implemented in core but not surface-driven).
+3. Settings editors (sound device, scheduler, now-playing export config).
+4. REST mirrors for the new parity ops (currently WS-only; REST keeps the read-only set).
+5. Packaging for the shell: `cargo tauri build` deb/rpm job (bundle config already in
    `tauri.conf.json`: targets deb/rpm, identifier `dev.radiocraft.window`).
-8. Cosmetic: on shell exit two benign GTK teardown warnings (appindicator known quirk) +
+6. Cosmetic: on shell exit two benign GTK teardown warnings (appindicator known quirk) +
    libayatana deprecation warning — harmless.
 
 Deferred fidelity checks (optional): cross-check `LoudnessCalculator.cs`, Plugin_SoundProcessing
@@ -195,6 +211,11 @@ FX keys against decompiles.
   Screenshot attempts failed (`magick import` unusable, `spectacle -rbn` non-interactive
   hangs); verify via `ss -tnp state established '( dport = :8030 )'` instead.
 - WS CLI smoke: `python3` one-liners against the wire (remember `args` nesting).
+- Live-DB integration test (scratch DB `radiocraft_test` on the same MariaDB; schema
+  auto-bootstraps on connect): `RC_DB_TEST_DSN="mysql://root:changeme@127.0.0.1:3306/
+  radiocraft_test" cargo test -p radiocraft-server --test commands`. Test tone copies are
+  written under `/tmp/opencode/smoke-audio/parity-*.wav`; the test scrubs its own residue
+  at start so repeated runs are idempotent. Without `RC_DB_TEST_DSN` the live test skips.
 
 ## 10. Toolchain / environment quirks (hard-won)
 
@@ -202,6 +223,12 @@ FX keys against decompiles.
   committed style (polluted 42 files once, had to revert). Format only targeted files, or skip.
 - No let-chains. `PathBuf → &Path` derefs automatically (avoid `.as_path()`).
 - clippy deny: `cargo clippy … -- -D warnings`.
+- MySQL/sqlx decode gotchas: `LAST_INSERT_ID()` and `MAX(ord)`/`COALESCE` over unsigned
+  columns return `BIGINT UNSIGNED`/`DECIMAL` which the driver refuses to decode into `i64`
+  — wrap in `CAST(... AS SIGNED)`. `query()` placeholder count must match binds at runtime
+  (server-side prepared; wrong count = error 1210, caught only by live tests). Songs INSERT
+  must list every `NOT NULL`-no-default column (`alternate_title composer label publisher
+  copyright isrc` — the schema has no defaults for those).
 - axum 0.8: `Message::Text(Utf8Bytes)`, handler state `State<ServerSocket>`; axum-test 21
   needs `ws` feature.
 - Svelte 5.57: exports `mount` (NOT `createApp`); templates forbid mixing `on:` legacy with
@@ -217,7 +244,7 @@ FX keys against decompiles.
 ## 11. Quick session-start checklist
 
 1. `cd /home/john/Dev/radiocraft && export PATH=$HOME/.cargo/bin:$PATH`
-2. `git log --oneline -3` (expect `717c412` or newer), `git status` (expect clean)
+2. `git log --oneline -3` (expect `0904464` or newer), `git status` (expect clean)
 3. Check infra: `ss -H -lnt '( sport = :8030 )'` (server), `ss -H -lnt '( sport = :3306 )'`
    (MariaDB); restart per §9 if down.
 4. `cargo test --workspace --exclude radiocraft-window && cargo clippy --workspace --exclude
