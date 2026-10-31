@@ -106,25 +106,81 @@ export interface SongRow {
   cue_times: string;
   weight: string;
   count_played: number;
+  enabled: boolean;
+  id_genre: number;
+  id_subcat: number;
+  year: string;
   artist_played?: string | null;
   title_played?: string | null;
   album_played?: string | null;
   date_played?: string | null;
 }
 
+/**
+ * A full `songs` row (`entities.rs::Song`) for library_get / library_update.
+ * `library_update` echoes the whole row back, so unknown fields are kept
+ * verbatim by spreading the loaded row before editing.
+ */
+export type SongFull = SongRow & {
+  enabled: boolean;
+  original_artist: string;
+  original_duration: string;
+  id_genre: number;
+  id_subcat: number;
+  [key: string]: unknown;
+};
+
+/** One `history` row (`entities.rs::HistoryEntry`). */
 export interface HistoryRow {
   ID: number;
-  song_id: number;
-  station: string;
+  trackID: number;
+  date_played?: string | null;
+  song_type: number;
+  id_subcat: number;
+  id_genre: number;
+  duration: string;
   artist: string;
+  original_artist: string;
   title: string;
-  datetime_play: string;
-  segment_length: string;
-  daypart?: string;
-  tod?: string;
-  artist_played?: string | null;
-  album_played?: string | null;
-  title_played?: string | null;
+  album: string;
+  composer: string;
+  label: string;
+  year: string;
+  track_no: number;
+  disc_no: number;
+  publisher: string;
+  copyright: string;
+  isrc: string;
+  listeners?: number | null;
+}
+
+/** One `queuelist` row (`entities.rs::QueueItem`). */
+export interface QueueRow {
+  ID: number;
+  songID: number;
+  ETA?: string | null;
+  duration: string;
+  artist: string;
+  associated_artists: string;
+  title: string;
+  album: string;
+  swID: number;
+  swPlay: string;
+  vtID: number;
+  vtPlay: string;
+}
+
+/** `library_filter` args (`dispatch.rs::library_filter_args`). */
+export interface LibraryFilterArgs {
+  text?: string;
+  idCategory?: number;
+  idSubcat?: number;
+  idGenre?: number;
+  idRotation?: number;
+  enabled?: boolean | null;
+  sort?: "artist" | "title" | "album" | "duration" | "year" | "weight" | "count";
+  limit?: number;
+  offset?: number;
 }
 
 export interface PlaylistHeader {

@@ -2,18 +2,29 @@
   import { session } from "./session.svelte";
   import type { HistoryRow } from "./protocol";
 
-  let rows = $state<HistoryRow[]>([]);
+  let needle = $state("");
   let loading = $state(false);
+  let offset = $state(0);
+  const PAGE = 200;
 
+  const rows = $derived(session.history);
+  const total = $derived(session.historyTotal);
   const ready = $derived(session.conn === "open" && session.dbConnected);
+  let loadedFor = $state(0);
 
-  async function refresh() {
+  // Auto-load the first page once the database becomes ready (after connect).
+  $effect(() => {
+    if (ready && loadedFor !== session.dbConnects) {
+      loadedFor = session.dbConnects;
+      void refresh();
+    }
+  });
+
+  async function refresh(reset = true) {
+    if (reset) offset = 0;
     loading = true;
     try {
-      const res = await fetch(`/api/history?limit=${200}`);
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const body = (await res.json()) as { history: HistoryRow[] };
-      rows = body.history ?? [];
+      await session.filterHistory(needle.trim(), PAGE, offset);
     } catch (e) {
       session.lastError = String(e);
     } finally {
@@ -21,35 +32,76 @@
     }
   }
 
-  function when(row: HistoryRow): string {
-    const d = new Date(row.datetime_play);
-    return Number.isNaN(d.getTime()) ? row.datetime_play : d.toLocaleString();
+  async function call(fn: () => Promise<unknown>) {
+    try {
+      await fn();
+      await refresh(false);
+    } catch (e) {
+      session.lastError = String(e);
+    }
   }
 
-  $effect(() => {
-    if (ready) void refresh();
-  });
+  function when(row: HistoryRow): string {
+    if (!row.date_played) return "—";
+    const d = new Date(row.date_played);
+    return Number.isNaN(d.getTime()) ? row.date_played : d.toLocaleString();
+  }
 </script>
 
 <section class="panel history">
   <h2>History</h2>
   <div class="row">
-    <button onclick={() => void refresh()} disabled={!ready || loading}>{loading ? "…" : "Refresh"}</button>
+    <input
+      type="search"
+      placeholder="Filter artist / title…"
+      bind:value={needle}
+      onkeydown={(e) => e.key === "Enter" && void refresh()}
+    />
+    <button onclick={() => void refresh()} disabled={!ready || loading}>{loading
+      ? "…"
+      : "Search"}</button>
+    <button
+      disabled={!ready || offset === 0}
+      onclick={() => {
+        offset = Math.max(0, offset - PAGE);
+        void refresh(false);
+      }}>Prev</button>
+    <button
+      disabled={!ready || offset + PAGE >= total}
+      onclick={() => {
+        offset += PAGE;
+        void refresh(false);
+      }}>Next</button>
+    <span class="count mono">{total} plays</span>
   </div>
   <div class="scroll">
     <table>
       <thead>
-        <tr><th>When</th><th>Artist</th><th>Title</th></tr>
+        <tr><th>When</th><th>Artist</th><th>Title</th><th>Actions</th></tr>
       </thead>
       <tbody>
         {#each rows as row (row.ID)}
           <tr>
             <td class="mono dim">{when(row)}</td>
-            <td>{row.artist}</td>
-            <td>{row.title}</td>
+            <td title={row.artist}>{row.artist}</td>
+            <td title={row.title}>{row.title}</td>
+            <td class="actions">
+              <button title="Rewind this play" onclick={() => void call(() => session.playFromHistory(row.ID))}>
+                Rewind
+              </button>
+              <button
+                title="Add to play queue"
+                disabled={!row.trackID}
+                onclick={() => void call(() => session.queueAddSong(row.trackID))}>
+                Queue
+              </button>
+              <button class="danger" title="Delete row" onclick={() => void call(() => session.deleteHistory(row.ID))}>
+                ✕
+              </button>
+            </td>
           </tr>
         {:else}
-          <tr class="empty"><td colspan={3}>{ready ? "No plays yet." : "Connect the database first."}</td></tr>
+          <tr class="empty"><td colspan={4}>{ready ? "No plays yet." : "Connect the database first."}</td></tr>
         {/each}
       </tbody>
     </table>
@@ -60,6 +112,18 @@
   .row {
     display: flex;
     gap: 8px;
+    align-items: center;
+  }
+
+  .row input[type="search"] {
+    flex: 1;
+    min-width: 12ch;
+  }
+
+  .count {
+    margin-left: auto;
+    color: var(--fg-dim);
+    font-size: 12px;
   }
 
   .scroll {
@@ -82,7 +146,7 @@
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
-    max-width: 28ch;
+    max-width: 22ch;
   }
 
   thead th {
@@ -95,6 +159,16 @@
 
   .dim {
     color: var(--fg-dim);
+  }
+
+  .actions {
+    display: flex;
+    gap: 4px;
+  }
+
+  .actions button {
+    padding: 2px 7px;
+    font-size: 12px;
   }
 
   .empty td {

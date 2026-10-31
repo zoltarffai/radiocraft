@@ -9,10 +9,14 @@ import type {
   ClientMsg,
   DbConfigView,
   Frame,
+  HistoryRow,
   LevelInfo,
+  LibraryFilterArgs,
   NowInfo,
   PlaylistHeader,
   PlaylistItemRow,
+  QueueRow,
+  SongFull,
   SongRow,
   StatusInfo,
   ZoneMix,
@@ -62,6 +66,11 @@ class Session {
   playlistItems = $state<PlaylistItemRow[]>([]);
   carts = $state<CartHeader[]>([]);
   cartButtons = $state<CartButtonRow[]>([]);
+  queue = $state<QueueRow[]>([]);
+  history = $state<HistoryRow[]>([]);
+  /** Row count of the last library_filter/history_filter (pagination). */
+  libraryTotal = $state(0);
+  historyTotal = $state(0);
 
   /** Reactive log of the last error frame, for the toast strip. */
   lastError = $state<string | null>(null);
@@ -208,6 +217,113 @@ class Session {
   async loadCartButtons(id: number): Promise<void> {
     const r = await this.cmd<{ buttons: CartButtonRow[] }>("list_cart_buttons", { cartId: id });
     this.cartButtons = r.buttons ?? [];
+  }
+
+  // ---- library edit ops -----------------------------------------------------
+
+  /** Run a library_filter; results land in `songs` + `libraryTotal`. */
+  async filterLibrary(args: LibraryFilterArgs): Promise<void> {
+    const r = await this.cmd<{ total: number; songs: SongRow[] }>("library_filter", args);
+    this.songs = r.songs ?? [];
+    this.libraryTotal = r.total ?? 0;
+  }
+  async getSong(id: number): Promise<SongFull> {
+    const r = await this.cmd<{ song: SongFull }>("library_get", { songId: id });
+    return r.song;
+  }
+  updateSong(song: SongFull): Promise<unknown> {
+    return this.cmd("library_update", { song });
+  }
+  deleteSong(id: number): Promise<unknown> {
+    return this.cmd("library_delete", { songId: id });
+  }
+  massSet(ids: number[], field: "enabled" | "weight" | "genre" | "subcat", value: unknown): Promise<unknown> {
+    return this.cmd("library_mass_set", { ids, field, value });
+  }
+  massDelete(ids: number[]): Promise<unknown> {
+    return this.cmd("library_mass_delete", { ids });
+  }
+
+  // ---- history ops ----------------------------------------------------------
+
+  /** Run a history_filter; results land in `history` + `historyTotal`. */
+  async filterHistory(text = "", limit = 200, offset = 0): Promise<void> {
+    const r = await this.cmd<{ total: number; history: HistoryRow[] }>("history_filter", {
+      text,
+      limit,
+      offset,
+    });
+    this.history = r.history ?? [];
+    this.historyTotal = r.total ?? 0;
+  }
+  deleteHistory(id: number): Promise<unknown> {
+    return this.cmd("history_delete", { historyId: id });
+  }
+  playFromHistory(id: number): Promise<unknown> {
+    return this.cmd("play_history", { historyId: id });
+  }
+  /** Park the currently-loaded item in the queue ("play next"). */
+  playNext(): Promise<unknown> {
+    return this.cmd("play_next");
+  }
+
+  // ---- playlist edit ops ------------------------------------------------------
+
+  async createPlaylist(name: string): Promise<number> {
+    const r = await this.cmd<{ playlistId: number }>("playlist_create", { name });
+    return r.playlistId;
+  }
+  renamePlaylist(id: number, name: string): Promise<unknown> {
+    return this.cmd("playlist_rename", { playlistId: id, name });
+  }
+  deletePlaylist(id: number): Promise<unknown> {
+    return this.cmd("playlist_delete", { playlistId: id });
+  }
+  playlistAddItem(playlistId: number, songId: number): Promise<unknown> {
+    return this.cmd("playlist_add_item", { playlistId, songId });
+  }
+  playlistRemoveItem(itemId: number): Promise<unknown> {
+    return this.cmd("playlist_remove_item", { itemId });
+  }
+  /** 1-based positions, reindexed afterwards. */
+  playlistMoveItem(playlistId: number, from: number, to: number): Promise<unknown> {
+    return this.cmd("playlist_move_item", { playlistId, from, to });
+  }
+  playlistSetCues(
+    itemId: number,
+    cues: { cstart: number; cnext: number; cend: number; fin: number; fout: number }
+  ): Promise<unknown> {
+    return this.cmd("playlist_set_cues", { itemId, ...cues });
+  }
+  playlistSetSong(itemId: number, songId: number): Promise<unknown> {
+    return this.cmd("playlist_set_song", { itemId, songId });
+  }
+
+  // ---- play queue ops ---------------------------------------------------------
+
+  async loadQueue(limit = 200): Promise<void> {
+    const r = await this.cmd<{ items: QueueRow[] }>("list_queue", { limit });
+    this.queue = r.items ?? [];
+  }
+  queueAddSong(songId: number): Promise<unknown> {
+    return this.cmd("queue_add_song", { songId });
+  }
+  queueAddFile(path: string, title?: string): Promise<unknown> {
+    return this.cmd("queue_add_file", { path, title });
+  }
+  queueRemove(id: number): Promise<unknown> {
+    return this.cmd("queue_remove", { queueId: id });
+  }
+  queueClear(): Promise<unknown> {
+    return this.cmd("queue_clear");
+  }
+  /** eta: RFC3339 or local 'YYYY-MM-DD HH:MM:SS'. */
+  queueEtaSet(id: number, eta: string): Promise<unknown> {
+    return this.cmd("queue_eta_set", { queueId: id, eta });
+  }
+  /** Reorder by swapping ETAs with another row. */
+  queueMove(id: number, withId: number): Promise<unknown> {
+    return this.cmd("queue_move", { queueId: id, with: withId });
   }
 
   // ---- frame handling ------------------------------------------------------

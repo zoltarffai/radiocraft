@@ -6,6 +6,8 @@
   import Database from "./lib/Database.svelte";
   import Library from "./lib/Library.svelte";
   import HistoryPanel from "./lib/HistoryPanel.svelte";
+  import QueuePanel from "./lib/QueuePanel.svelte";
+  import PlaylistEditor from "./lib/PlaylistEditor.svelte";
 
   onMount(() => {
     session.start();
@@ -37,6 +39,8 @@
     </section>
 
     <section class="col wide"><Library /></section>
+    <section class="col wide"><QueuePanel /></section>
+    <section class="col wide"><PlaylistEditor /></section>
     <section class="col wide"><HistoryPanel /></section>
   </main>
 
