@@ -46,7 +46,7 @@ fn error_of(frame: Frame) -> String {
 #[tokio::test]
 async fn parity_ops_error_without_db() {
     let app = tmp_app();
-    let cases: [(&str, Value); 12] = [
+    let cases: [(&str, Value); 13] = [
         ("library_filter", json!({"text": "x"})),
         ("library_get", json!({"songId": 1})),
         ("library_update", json!({"song": {}})),
@@ -56,6 +56,7 @@ async fn parity_ops_error_without_db() {
         ("history_filter", json!({"text": "x"})),
         ("history_delete", json!({"historyId": 1})),
         ("play_history", json!({"historyId": 1})),
+        ("play_cart", json!({"buttonId": 1})),
         ("play_next", json!({})),
         ("list_queue", json!({})),
         ("queue_add_song", json!({"songId": 1})),
@@ -140,6 +141,7 @@ async fn live_command_round_trip() {
         "DELETE FROM songs WHERE path LIKE '/tmp/opencode/smoke-audio/parity-%'",
         "DELETE FROM history WHERE title = 'Parity Title'",
         "DELETE FROM playlists WHERE name LIKE 'Parity PL%'",
+        "DELETE FROM carts WHERE name = 'Parity Cart'",
     ] {
         sqlx::raw_sql(sql).execute(scrub.pool()).await.expect("scrub");
     }
@@ -227,4 +229,125 @@ async fn live_command_round_trip() {
     // Cleanup.
     let data = result_of(call(&app, "library_delete", json!({"songId": song_id})).await);
     assert_eq!(data["removed"], json!(1));
+}
+
+/// Cartwall play parity: `play_cart` rolls the linked song on the cart zone,
+/// books history at start (RadioDJ's UpdateHistory), toggles off on a second
+/// press, and clears the wall highlight on stop.
+#[tokio::test]
+async fn live_cart_play() {
+    let app = tmp_app();
+    if !connect_live(&app).await {
+        return;
+    }
+
+    let dsn_raw = std::env::var("RC_DB_TEST_DSN").unwrap();
+    let scrub = radiocraft_db::Db::connect_url(&dsn_raw).await.expect("scrub conn");
+    for sql in [
+        "DELETE FROM songs WHERE path LIKE '/tmp/opencode/smoke-audio/cart-%'",
+        "DELETE FROM carts WHERE name = 'Parity Cart'",
+    ] {
+        sqlx::raw_sql(sql).execute(scrub.pool()).await.expect("scrub");
+    }
+    scrub.close().await;
+
+    // A library song to link, then a cart wall with one button in slot 7.
+    let src = std::env::var("RC_TEST_AUDIO").unwrap_or_else(|_| "/tmp/opencode/smoke-audio/testtone.wav".into());
+    if !std::path::Path::new(&src).exists() {
+        eprintln!("skipping live-db test: test audio file {src} missing");
+        return;
+    }
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let file = format!("/tmp/opencode/smoke-audio/cart-{nanos}.wav");
+    let file_stem = format!("cart-{nanos}");
+    std::fs::copy(&src, &file).expect("copy tone");
+    let data = result_of(call(&app, "library_add", json!({"path": file})).await);
+    let song_id = data["songId"].as_u64().expect("songId");
+
+    let db = app.require_db().await.expect("db");
+    let cart_id = radiocraft_db::entities::insert_cart(db.pool(), "Parity Cart")
+        .await
+        .expect("insert cart");
+    let mut conn = db.pool().acquire().await.expect("acquire");
+    sqlx::query("INSERT INTO carts_list (pID, swID, swButton, color) VALUES (?, ?, 7, '#00ff00')")
+        .bind(cart_id)
+        .bind(song_id)
+        .execute(&mut *conn)
+        .await
+        .expect("insert cart button");
+    let button_id: i64 = sqlx::query_scalar("SELECT CAST(LAST_INSERT_ID() AS SIGNED)")
+        .fetch_one(&mut *conn)
+        .await
+        .expect("button id");
+    let button_id = button_id as u64;
+    drop(conn);
+    drop(db);
+
+    // Arg validation.
+    let msg = error_of(call(&app, "play_cart", json!({})).await);
+    assert!(msg.contains("buttonId"), "{msg}");
+    let msg = error_of(call(&app, "play_cart", json!({"buttonId": 999_999_999})).await);
+    assert!(msg.contains("no such cart button"), "{msg}");
+
+    // Press: rolls on the cart zone + books history immediately.
+    let data = result_of(call(&app, "play_cart", json!({"buttonId": button_id})).await);
+    assert_eq!(data["cart"]["button_id"], json!(button_id));
+    assert_eq!(data["cart"]["song_id"], json!(song_id));
+    assert_eq!(data["cart"]["cart_id"], json!(cart_id));
+    assert!(data["historyId"].as_u64().expect("historyId") > 0, "{data}");
+    let history_id = data["historyId"].as_u64().unwrap();
+    let cart_title = data["cart"]["title"].as_str().unwrap_or("").to_string();
+    assert!(!cart_title.is_empty());
+
+    // The player frame carries the active button (wall highlight source).
+    let frame = {
+        let mut rx = app.tx.subscribe();
+        app.tx.send(app.player_frame()).expect("frame");
+        rx.recv().await.expect("frame recv")
+    };
+    match frame {
+        Frame::Player { cart, .. } => {
+            let cart = cart.expect("active cart in player frame");
+            assert_eq!(cart.button_id, button_id as u32);
+        }
+        other => panic!("expected player frame, got {other:?}"),
+    }
+
+    // Pressing the rolled button again stops it (toggle).
+    let data = result_of(call(&app, "play_cart", json!({"buttonId": button_id})).await);
+    assert_eq!(data["stopped"], json!(true), "{data}");
+    // The book at start used the linked song's own title.
+    let song_row = result_of(call(&app, "library_filter", json!({"text": file_stem})).await);
+    let booked_title = song_row["songs"][0]["title"].as_str().unwrap_or("").to_string();
+    let data = result_of(call(&app, "history_filter", json!({"text": booked_title})).await);
+    assert!(data["total"].as_u64().expect("total") >= 1, "{data}");
+
+    // By cart + slot number, then stopped via the transport.
+    let data = result_of(call(&app, "play_cart", json!({"cartId": cart_id, "number": 7})).await);
+    assert_eq!(data["cart"]["button_id"], json!(button_id));
+    let data = result_of(call(&app, "stop", json!({"zone": "cart"})).await);
+    assert_eq!(data, json!({}));
+    let frame = {
+        let mut rx = app.tx.subscribe();
+        app.tx.send(app.player_frame()).expect("frame");
+        rx.recv().await.expect("frame recv")
+    };
+    match frame {
+        Frame::Player { cart, .. } => assert!(cart.is_none(), "wall highlight must clear"),
+        other => panic!("expected player frame, got {other:?}"),
+    }
+
+    // Cleanup.
+    let db = app.require_db().await.expect("db");
+    radiocraft_db::entities::delete_cart(db.pool(), cart_id as u32)
+        .await
+        .expect("delete cart");
+    let data = result_of(call(&app, "history_delete", json!({"historyId": history_id})).await);
+    assert_eq!(data["removed"], json!(1));
+    let data = result_of(call(&app, "library_delete", json!({"songId": song_id})).await);
+    assert_eq!(data["removed"], json!(1));
+    let _ = std::fs::remove_file(&file);
 }

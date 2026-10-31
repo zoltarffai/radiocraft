@@ -45,6 +45,20 @@ pub struct ZoneState {
     pub remaining_secs: Option<f64>,
 }
 
+/// Cartwall button currently rolled on the cart zone (null in `player`
+/// frames when no cart is playing). Mirrors RadioDJ's `CartStarted` host
+/// signal: the wall highlights the active button until it stops.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CartNowInfo {
+    /// `carts_list.ID` of the button.
+    pub button_id: u32,
+    /// `carts.ID` of the cart wall the button belongs to.
+    pub cart_id: u32,
+    /// `songs.ID` of the linked track.
+    pub song_id: i64,
+    pub title: String,
+}
+
 /// Now-playing metadata block (null in `player` frames when idle).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct NowInfo {
@@ -121,6 +135,8 @@ pub enum Frame {
     Player {
         now: Option<NowInfo>,
         zones: Vec<ZoneState>,
+        /// Active cartwall button, when a cart is rolled.
+        cart: Option<CartNowInfo>,
     },
     /// Master meters + live positions, pushed at 20 Hz.
     Meters {

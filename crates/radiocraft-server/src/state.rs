@@ -24,7 +24,7 @@ use radiocraft_settings::{DatabaseSettings, GeneralSettings, PluginSettings};
 use serde::Serialize;
 use tokio::sync::{broadcast, RwLock};
 
-use crate::frames::{Frame, LevelInfo, NowInfo, StatusInfo, ZoneMix, ZoneState};
+use crate::frames::{CartNowInfo, Frame, LevelInfo, NowInfo, StatusInfo, ZoneMix, ZoneState};
 
 /// Settings file for the now-playing exporter plugin (same name as the
 /// RadioDJ plugin config, so an existing `Plugins/` directory is reused).
@@ -204,8 +204,36 @@ pub struct App {
     pub db_cfg: RwLock<DbConfig>,
     /// Short critical section only (never held across `.await`).
     now: std::sync::RwLock<Option<NowPlaying>>,
+    /// Cartwall button currently rolled on the cart zone (RadioDJ's
+    /// `CartStarted` equivalent); the cart zone never touches `now`.
+    cart_now: std::sync::RwLock<Option<CartNow>>,
     pub status: RwLock<Status>,
     pub tx: broadcast::Sender<Frame>,
+}
+
+/// The active cartwall button, mirroring RadioDJ cart semantics: one cart
+/// rolls at a time on the dedicated cart zone, ducking the main program.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CartNow {
+    /// `carts_list.ID` of the pressed button.
+    pub button_id: u32,
+    /// `carts.ID` of the cart wall it belongs to.
+    pub cart_id: u32,
+    /// `songs.ID` of the linked track.
+    pub song_id: i64,
+    pub title: String,
+}
+
+impl CartNow {
+    /// The wire view of the active cart button.
+    pub fn info(&self) -> CartNowInfo {
+        CartNowInfo {
+            button_id: self.button_id,
+            cart_id: self.cart_id,
+            song_id: self.song_id,
+            title: self.title.clone(),
+        }
+    }
 }
 
 impl App {
@@ -250,6 +278,7 @@ impl App {
             db: RwLock::new(None),
             db_cfg: RwLock::new(db_config_from(&database)),
             now: std::sync::RwLock::new(None),
+            cart_now: std::sync::RwLock::new(None),
             status: RwLock::new(Status::info("Not connected to the database")),
             tx,
         })
@@ -368,6 +397,38 @@ impl App {
         }
     }
 
+    // ---- cart zone -----------------------------------------------------------
+
+    /// The active cartwall button, if any.
+    pub fn cart_now(&self) -> Option<CartNow> {
+        self.cart_now.read().expect("cart now lock").clone()
+    }
+
+    /// Roll a cart button (replacing any previous one) and push the frame.
+    pub fn set_cart_now(&self, cart: CartNow) {
+        *self.cart_now.write().expect("cart now lock") = Some(cart);
+        let _ = self.tx.send(self.player_frame());
+    }
+
+    /// Clear the active cart button (stop/replacement) and push the frame.
+    pub fn clear_cart_now(&self) {
+        if self.cart_now.write().expect("cart now lock").take().is_some() {
+            let _ = self.tx.send(self.player_frame());
+        }
+    }
+
+    /// If the rolled cart no longer sounds (natural end or manual stop),
+    /// clear the wall highlight.
+    pub fn refresh_cart_now(&self) {
+        let stale = {
+            let cart = self.cart_now.read().expect("cart now lock");
+            cart.is_some() && !self.engine.is_playing(Zone::Cart)
+        };
+        if stale {
+            self.clear_cart_now();
+        }
+    }
+
     // ---- frames -------------------------------------------------------------
 
     /// The transport/now-playing snapshot frame.
@@ -381,6 +442,7 @@ impl App {
         Frame::Player {
             now,
             zones: self.zone_states(),
+            cart: self.cart_now().map(|c| c.info()),
         }
     }
 

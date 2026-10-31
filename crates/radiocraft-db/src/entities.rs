@@ -1672,6 +1672,32 @@ pub async fn list_cart_buttons(pool: &MySqlPool, cart_id: u32) -> Result<Vec<Car
     .await?)
 }
 
+/// One `carts_list` row by its primary key.
+pub async fn cart_button_by_id(pool: &MySqlPool, id: u32) -> Result<Option<CartButton>> {
+    Ok(sqlx::query_as::<_, CartButton>(
+        "SELECT ID, pID, swID, swButton, color FROM carts_list WHERE ID = ?",
+    )
+    .bind(id)
+    .fetch_optional(pool)
+    .await?)
+}
+
+/// One `carts_list` row by cart + button slot number (`swButton`), the
+/// RadioDJ cartwall layout position used by `IHost.PlayCartByNumber`.
+pub async fn cart_button_by_number(
+    pool: &MySqlPool,
+    cart_id: u32,
+    sw_button: u32,
+) -> Result<Option<CartButton>> {
+    Ok(sqlx::query_as::<_, CartButton>(
+        "SELECT ID, pID, swID, swButton, color FROM carts_list WHERE pID = ? AND swButton = ?",
+    )
+    .bind(cart_id)
+    .bind(sw_button)
+    .fetch_optional(pool)
+    .await?)
+}
+
 /// A `carts_list` button joined with its library song, for cartwall display.
 #[derive(Debug, Clone, Serialize, sqlx::FromRow)]
 pub struct CartButtonRow {

@@ -43,6 +43,7 @@ async fn run(app: &Arc<App>, op: &str, args: &Value) -> Result<Value> {
         // ---- transport ------------------------------------------------------
         "play" => start(app, args, false).await,
         "cue" => start(app, args, true).await,
+        "play_cart" => play_cart(app, args).await,
         "segue_now" => {
             let zone = arg_zone(args)?;
             app.engine.segue_now(zone, arg_i32(args, "fade", -1))?;
@@ -51,6 +52,9 @@ async fn run(app: &Arc<App>, op: &str, args: &Value) -> Result<Value> {
         "stop" => {
             let zone = arg_zone(args)?;
             app.engine.stop(zone, arg_i32(args, "fade", -1));
+            if matches!(zone, Zone::Cart) {
+                app.clear_cart_now();
+            }
             Ok(json!({}))
         }
         "stop_all" => {
@@ -638,6 +642,71 @@ async fn start(app: &Arc<App>, args: &Value, follow: bool) -> Result<Value> {
     app.on_track_started(playing).await;
     let _ = app.tx.send(app.player_frame());
     Ok(json!({ "now": info }))
+}
+
+/// Play (or stop) the track linked to a cartwall button, mirroring
+/// RadioDJ's `CartButtonControl.set_PlayCart`: pressing the rolled button
+/// stops it; otherwise the linked `songs` row rolls on the dedicated cart
+/// zone (auto-ducking the main program) and history is booked at start via
+/// the lightweight `UpdateHistory` insert — carts never enter the main
+/// now-playing hub, so the program item keeps running underneath.
+async fn play_cart(app: &Arc<App>, args: &Value) -> Result<Value> {
+    let db = app.require_db().await?;
+    let button = if let Some(button_id) = args.get("buttonId").and_then(Value::as_u64) {
+        radiocraft_db::entities::cart_button_by_id(db.pool(), button_id as u32).await?
+    } else if let Some(cart_id) = args.get("cartId").and_then(Value::as_u64) {
+        let number = arg_u32(args, "number")?;
+        radiocraft_db::entities::cart_button_by_number(db.pool(), cart_id as u32, number).await?
+    } else {
+        return Err(anyhow!("play_cart needs a 'buttonId', or a 'cartId' + 'number'"));
+    }
+    .ok_or_else(|| anyhow!("no such cart button"))?;
+    if button.swID == 0 {
+        return Err(anyhow!("cart button {} is not assigned", button.swButton));
+    }
+
+    // Toggle: pressing the rolled button stops the cart with a fade.
+    if app.cart_now().is_some_and(|c| c.button_id == button.ID) && app.engine.is_playing(Zone::Cart)
+    {
+        app.engine.stop(Zone::Cart, arg_i32(args, "fade", -1));
+        app.clear_cart_now();
+        return Ok(json!({ "stopped": true, "buttonId": button.ID }));
+    }
+
+    let song = radiocraft_db::entities::song_by_id(db.pool(), button.swID)
+        .await?
+        .ok_or_else(|| anyhow!("cart button {} links to missing song {}", button.swButton, button.swID))?;
+    let path = PathBuf::from(&song.path);
+    if !path.exists() {
+        return Err(anyhow!("no such file: {}", song.path));
+    }
+
+    // RadioDJ books carts at play start (UpdateHistory), not at stop.
+    let history_id = radiocraft_db::entities::add_history_row(
+        db.pool(),
+        song.ID,
+        i32::from(song.song_type),
+        &song.artist,
+        &song.title,
+    )
+    .await?;
+
+    let knobs = knobs_from_song(&song);
+    let (req, duration) = request_for_file(&path, &knobs)?;
+    app.engine
+        .play(Zone::Cart, req, i32::from(song.song_type), song.overlay)?;
+    let cart = crate::state::CartNow {
+        button_id: button.ID,
+        cart_id: button.pID,
+        song_id: i64::from(song.ID),
+        title: song.title.clone(),
+    };
+    app.set_cart_now(cart.clone());
+    Ok(json!({
+        "cart": cart.info(),
+        "historyId": history_id,
+        "duration_secs": duration,
+    }))
 }
 
 /// Rebuild a knob bundle from the (possibly patched) now-playing knobs.

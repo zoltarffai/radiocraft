@@ -100,10 +100,10 @@ WS frames (JSON): server sends `{"t":"ready"}` first. Client (optional) `{"t":"h
 `args`**. Errors: `{"code":"unauthorized"}` closes socket. There is **no `get_zonestate`**
 op — state is pushed. `sub`-gated pushes only.
 
-Ops (dispatch.rs, 54): `play pause resume stop stop_all stop_at seek segue_now cue
+Ops (dispatch.rs, 55): `play pause resume stop stop_all stop_at seek segue_now cue
 get_setting set_setting set_zone_fader_db set_zone_muted set_master_db get_db_config
 db_configure db_connect list_songs search_songs list_playlists list_playlist_items
-list_carts list_cart_buttons list_history` — plus the milestone-3 parity set:
+list_carts list_cart_buttons list_history play_cart` — plus the milestone-3 parity set:
 library `library_filter library_get library_add library_update library_delete
 library_mass_set library_mass_delete`; history `history_filter history_add history_delete
 play_history` (rewind = re-add to library, returns `{"restored":id}`); playlists
@@ -111,6 +111,16 @@ play_history` (rewind = re-add to library, returns `{"restored":id}`); playlists
 playlist_move_item playlist_set_cues playlist_set_song`; queue
 `list_queue queue_add_song queue_add_file queue_remove queue_clear queue_eta_set
 queue_move` (ETA swap, args `{queueId,with}`); transport extra `play_next`.
+
+Cart play parity (`play_cart`, mirrors `Plugin_InstantPlayers/CartButtonControl.set_PlayCart`):
+args `{buttonId}` or `{cartId,"number":slot}` (+ optional `fade` ms). Press rolls the linked
+`songs` row (via `carts_list.swID`) on the **cart zone** at position 0 and books history
+immediately at start (lightweight `UpdateHistory` insert — no rotation counters, no
+`UpdateTracks2`); pressing the rolled button again stops it with a fade. Carts never enter
+the main now-playing hub; the cart zone auto-ducks main via the mixer. The `player` frame
+carries `cart: {button_id,cart_id,song_id,title}|null` for the wall highlight; `stop` on the
+cart zone or natural finish clears it. Results: `{cart,historyId,duration_secs}` or
+`{stopped:true,buttonId}`. Covered live by `tests/commands.rs::live_cart_play`.
 
 Key result shapes: `{songs}`, `{total,songs}`, `{history}`, `{total,history}`,
 `{playlists}`, `{items}`, `{playlistId}`, `{song}`, `{songId}`, `{itemId}`, `{queued}`,
@@ -178,14 +188,12 @@ see §9).
 
 Still open:
 
-1. **Cart wall interaction** — buttons listed; playing a cart button not wired (use
-   `track_type` 12 semantics from core).
-2. AutoDJ exposure over WS (scheduler is implemented in core but not surface-driven).
-3. Settings editors (sound device, scheduler, now-playing export config).
-4. REST mirrors for the new parity ops (currently WS-only; REST keeps the read-only set).
-5. Packaging for the shell: `cargo tauri build` deb/rpm job (bundle config already in
+1. AutoDJ exposure over WS (scheduler is implemented in core but not surface-driven).
+2. Settings editors (sound device, scheduler, now-playing export config).
+3. REST mirrors for the new parity ops (currently WS-only; REST keeps the read-only set).
+4. Packaging for the shell: `cargo tauri build` deb/rpm job (bundle config already in
    `tauri.conf.json`: targets deb/rpm, identifier `dev.radiocraft.window`).
-6. Cosmetic: on shell exit two benign GTK teardown warnings (appindicator known quirk) +
+5. Cosmetic: on shell exit two benign GTK teardown warnings (appindicator known quirk) +
    libayatana deprecation warning — harmless.
 
 Deferred fidelity checks (optional): cross-check `LoudnessCalculator.cs`, Plugin_SoundProcessing

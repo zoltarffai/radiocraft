@@ -33,16 +33,17 @@ pub fn spawn_pump(app: Arc<App>) -> tokio::task::JoinHandle<()> {
 async fn drain_events(app: &Arc<App>) {
     for (zone, event) in app.engine.take_events() {
         match event {
-            PlayerEvent::Finished | PlayerEvent::SegueStarted => {
-                if matches!(zone, Zone::Main) {
-                    app.refresh_now_playing().await;
-                }
-            }
+            PlayerEvent::Finished | PlayerEvent::SegueStarted => match zone {
+                Zone::Main => app.refresh_now_playing().await,
+                Zone::Cart => app.refresh_cart_now(),
+                _ => {}
+            },
         }
     }
     // The engine may have ended the item without an event (manual stop,
     // VDF target, stop_at); keep `now` honest either way.
     app.refresh_now_playing().await;
+    app.refresh_cart_now();
 }
 
 #[cfg(test)]
