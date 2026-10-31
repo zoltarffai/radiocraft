@@ -800,6 +800,14 @@ pub async fn update_criteria(pool: &MySqlPool, c: &RotationCriteria) -> Result<u
     .rows_affected())
 }
 
+/// Fetch one rule line by `rotations_list.ID` (editor existence check).
+pub async fn get_criteria(pool: &MySqlPool, id: u32) -> Result<Option<RotationCriteria>> {
+    Ok(sqlx::query_as::<_, RotationCriteria>("SELECT * FROM rotations_list WHERE ID = ?")
+        .bind(id)
+        .fetch_optional(pool)
+        .await?)
+}
+
 pub async fn delete_criteria(pool: &MySqlPool, id: u32) -> Result<u64> {
     Ok(sqlx::query("DELETE FROM rotations_list WHERE ID = ?")
         .bind(id)

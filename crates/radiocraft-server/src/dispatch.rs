@@ -563,6 +563,17 @@ async fn run(app: &Arc<App>, op: &str, args: &Value) -> Result<Value> {
         "autodj_plan" => crate::autodj::op_plan(app).await,
         "autodj_play_next" => crate::autodj::op_play_next(app).await,
 
+        // ---- rotations / criteria ------------------------------------------
+        "list_rotations" => crate::rotations::op_list(app).await,
+        "rotation_create" => crate::rotations::op_create(app, args).await,
+        "rotation_rename" => crate::rotations::op_rename(app, args).await,
+        "rotation_delete" => crate::rotations::op_delete(app, args).await,
+        "list_criteria" => crate::rotations::op_list_criteria(app, args).await,
+        "criteria_add" => crate::rotations::op_criteria_add(app, args).await,
+        "criteria_update" => crate::rotations::op_criteria_update(app, args).await,
+        "criteria_delete" => crate::rotations::op_criteria_delete(app, args).await,
+        "list_lookup" => crate::rotations::op_lookup(app).await,
+
         other => Err(anyhow!("unknown op {other}")),
     }
 }
@@ -748,7 +759,7 @@ fn arg_zone(args: &Value) -> Result<Zone> {
     }
 }
 
-fn arg_str(args: &Value, key: &str) -> Result<String> {
+pub fn arg_str(args: &Value, key: &str) -> Result<String> {
     args.get(key)
         .and_then(Value::as_str)
         .map(str::to_string)
@@ -761,7 +772,7 @@ fn arg_f64(args: &Value, key: &str) -> Result<f64> {
         .ok_or_else(|| anyhow!("missing numeric arg {key}"))
 }
 
-fn arg_u32(args: &Value, key: &str) -> Result<u32> {
+pub fn arg_u32(args: &Value, key: &str) -> Result<u32> {
     args.get(key)
         .and_then(|v| v.as_u64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
         .map(|v| v as u32)

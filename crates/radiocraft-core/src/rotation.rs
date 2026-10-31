@@ -140,8 +140,10 @@ impl SelectionMode {
 }
 
 /// One rotation rule row ("clock wheel" entry, docs/01 sections 1.14 + the
-/// `rotation_criteria` appendix fields).
+/// `rotation_criteria` appendix fields). `#[serde(default)]` lets editor
+/// payloads send only the fields they touch.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct RotationCriteria {
     /// `rotations_list.ID`.
     pub id: i64,

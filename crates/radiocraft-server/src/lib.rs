@@ -11,6 +11,7 @@ pub mod frames;
 pub mod grid;
 pub mod http;
 pub mod playback;
+pub mod rotations;
 pub mod playlist;
 pub mod pump;
 pub mod run;

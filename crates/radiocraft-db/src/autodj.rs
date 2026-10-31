@@ -192,7 +192,7 @@ pub async fn load_rotations(pool: &MySqlPool) -> Result<Vec<CoreRotation>> {
         let name: String = row.try_get("name")?;
         let mut rotation = CoreRotation::new(i64::from(id), name);
         for c in entities::list_criteria(pool, id).await? {
-            rotation.criteria.push(criteria_from_row(&c)?);
+            rotation.criteria.push(criteria_for_editor(&c)?);
         }
         rotations.push(rotation);
     }
@@ -206,7 +206,7 @@ fn meta_opt(s: &Option<String>) -> Option<String> {
     }
 }
 
-fn criteria_from_row(row: &entities::RotationCriteria) -> Result<CoreCriteria> {
+pub fn criteria_for_editor(row: &entities::RotationCriteria) -> Result<CoreCriteria> {
     // RadioCraft editor extension: a JSON object in `data` carries the full
     // core criteria (dayparts, days, weight floor, named rule...).
     if row.data.trim_start().starts_with('{') {
