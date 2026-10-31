@@ -19,6 +19,7 @@
 // …); row models mirror the schema exactly, so the naming lints are silenced here.
 #![allow(non_snake_case, non_camel_case_types)]
 
+pub mod autodj;
 pub mod backup;
 pub mod bootstrap;
 pub mod booking;
