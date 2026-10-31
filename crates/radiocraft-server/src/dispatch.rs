@@ -557,6 +557,12 @@ async fn run(app: &Arc<App>, op: &str, args: &Value) -> Result<Value> {
             Ok(json!({ "swapped": [a, b] }))
         }
 
+        // ---- autodj ---------------------------------------------------------
+        "autodj_set" => crate::autodj::op_set(app, args).await,
+        "autodj_status" => Ok(crate::autodj::op_status(app)),
+        "autodj_plan" => crate::autodj::op_plan(app).await,
+        "autodj_play_next" => crate::autodj::op_play_next(app).await,
+
         other => Err(anyhow!("unknown op {other}")),
     }
 }
@@ -642,6 +648,13 @@ async fn start(app: &Arc<App>, args: &Value, follow: bool) -> Result<Value> {
     app.on_track_started(playing).await;
     let _ = app.tx.send(app.player_frame());
     Ok(json!({ "now": info }))
+}
+
+/// Play a library song on the main zone (AutoDJ fill uses this so the
+/// now-playing bookkeeping and `UpdateTracks2` booking are identical to
+/// an operator-initiated play).
+pub async fn play_song(app: &Arc<App>, song_id: i64) -> Result<Value> {
+    start(app, &json!({ "songId": song_id }), false).await
 }
 
 /// Play (or stop) the track linked to a cartwall button, mirroring

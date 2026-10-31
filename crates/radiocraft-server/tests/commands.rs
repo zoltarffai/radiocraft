@@ -91,6 +91,51 @@ async fn play_history_and_playlist_ops_reject_bad_args() {
     );
 }
 
+// ---- autodj (offline half) --------------------------------------------------
+
+/// The AutoDJ switch works with no database at all: status reports the
+/// knobs, `autodj_set` flips + persists the switch, and the plan/play ops
+/// fail cleanly with a database error until one is connected.
+#[tokio::test]
+async fn autodj_switch_works_without_db() {
+    let app = tmp_app();
+    let data = result_of(call(&app, "autodj_status", json!({})).await);
+    assert_eq!(data["enabled"], json!(false));
+    assert!(data["config"].is_object(), "{data}");
+    assert_eq!(data["lastPickSongId"], json!(null));
+
+    let msg = error_of(call(&app, "autodj_set", json!({})).await);
+    assert!(msg.contains("enabled"), "{msg}");
+    let msg = error_of(call(&app, "autodj_plan", json!({})).await);
+    assert!(msg.contains("database"), "{msg}");
+    let msg = error_of(call(&app, "autodj_play_next", json!({})).await);
+    assert!(msg.contains("database"), "{msg}");
+
+    let data = result_of(call(&app, "autodj_set", json!({"enabled": true})).await);
+    assert_eq!(data["enabled"], json!(true));
+    assert!(app.autodj_enabled());
+
+    // Persisted under the legacy key: a fresh app loads the switch back.
+    let reloaded = Arc::new(App::load(&app.config_dir).expect("reload"));
+    assert!(reloaded.autodj_enabled());
+
+    // Tuning knobs round-trip too.
+    let data = result_of(
+        call(
+            &app,
+            "autodj_set",
+            json!({"enabled": true, "config": {"max_candidates": 25}}),
+        )
+        .await,
+    );
+    assert_eq!(data["config"]["max_candidates"], json!(25));
+    assert_eq!(app.autodj_config().max_candidates, Some(25));
+
+    let data = result_of(call(&app, "autodj_set", json!({"enabled": false})).await);
+    assert_eq!(data["enabled"], json!(false));
+    assert!(!app.autodj_enabled());
+}
+
 // ---- live-database round trip ---------------------------------------------
 
 fn dsn() -> Option<(String, u16, String, String, String)> {
@@ -348,6 +393,152 @@ async fn live_cart_play() {
     let data = result_of(call(&app, "history_delete", json!({"historyId": history_id})).await);
     assert_eq!(data["removed"], json!(1));
     let data = result_of(call(&app, "library_delete", json!({"songId": song_id})).await);
+    assert_eq!(data["removed"], json!(1));
+    let _ = std::fs::remove_file(&file);
+}
+
+/// Full AutoDJ path against the live database: rotation + criteria rows
+/// drive the query, the plan reports the pick, and `autodj_play_next`
+/// rolls it through the normal play path.
+#[tokio::test]
+async fn live_autodj_plan_and_play() {
+    let app = tmp_app();
+    if !connect_live(&app).await {
+        return;
+    }
+
+    let dsn_raw = std::env::var("RC_DB_TEST_DSN").unwrap();
+    let scrub = radiocraft_db::Db::connect_url(&dsn_raw).await.expect("scrub conn");
+    for sql in [
+        "DELETE FROM songs WHERE path LIKE '/tmp/opencode/smoke-audio/autodj-%'",
+        "DELETE FROM rotations_list WHERE data = '#rc-parity-autodj'",
+        "DELETE FROM rotations WHERE name = 'Parity AutoDJ'",
+        "DELETE FROM subcategory WHERE name = 'Parity AutoDJ Sub'",
+    ] {
+        sqlx::raw_sql(sql).execute(scrub.pool()).await.expect("scrub");
+    }
+    scrub.close().await;
+
+    let src = std::env::var("RC_TEST_AUDIO").unwrap_or_else(|_| "/tmp/opencode/smoke-audio/testtone.wav".into());
+    if !std::path::Path::new(&src).exists() {
+        eprintln!("skipping live-db test: test audio file {src} missing");
+        return;
+    }
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let file = format!("/tmp/opencode/smoke-audio/autodj-{nanos}.wav");
+    std::fs::copy(&src, &file).expect("copy tone");
+
+    // Give the pool its own subcategory so unrelated library rows in the
+    // scratch DB can never leak into the plan.
+    let db = app.require_db().await.expect("db");
+    let mut conn = db.pool().acquire().await.expect("acquire");
+    sqlx::query("INSERT INTO subcategory (parentid, name) VALUES (1, 'Parity AutoDJ Sub')")
+        .execute(&mut *conn)
+        .await
+        .expect("insert subcategory");
+    let subcat_id: u32 = sqlx::query_scalar::<_, i64>("SELECT CAST(LAST_INSERT_ID() AS SIGNED)")
+        .fetch_one(&mut *conn)
+        .await
+        .expect("subcategory id") as u32;
+    drop(conn);
+    let song_a = result_of(
+        call(&app, "library_add", json!({"path": file, "weight": 100, "idSubcat": subcat_id})).await,
+    );
+    let song_a = song_a["songId"].as_u64().expect("songId");
+
+    let rotation_id = radiocraft_db::entities::insert_rotation(db.pool(), "Parity AutoDJ")
+        .await
+        .expect("insert rotation");
+    let criteria_row = radiocraft_db::entities::RotationCriteria {
+        ID: 0,
+        pID: rotation_id,
+        catID: 0,
+        subID: subcat_id as i32,
+        genID: 0,
+        mood: None,
+        gender: None,
+        language: None,
+        start_type: 0,
+        end_type: 0,
+        selType: false,
+        sweeper: false,
+        repeatRule: false,
+        ord: 0,
+        data: "#rc-parity-autodj".into(),
+        track_separation: 0,
+        artist_separation: 0,
+        title_separation: 0,
+        album_separation: 0,
+        advanced: None,
+    };
+    let criteria_id = radiocraft_db::entities::insert_criteria(db.pool(), &criteria_row)
+        .await
+        .expect("insert criteria");
+    drop(db);
+
+    // The switch is independent of planning.
+    let data = result_of(call(&app, "autodj_set", json!({"enabled": true})).await);
+    assert_eq!(data["enabled"], json!(true));
+    let data = result_of(call(&app, "autodj_status", json!({})).await);
+    assert_eq!(data["enabled"], json!(true));
+
+    // Dry run: our song must be the pick of our criteria.
+    let data = result_of(call(&app, "autodj_plan", json!({})).await);
+    assert_eq!(data["rotationId"], json!(rotation_id), "{data}");
+    assert_eq!(data["criteriaId"], json!(criteria_id), "{data}");
+    assert_eq!(data["pick"]["songId"], json!(song_a), "{data}");
+    assert_eq!(data["lastPickSongId"], json!(null));
+    let ordered = data["ordered"].as_array().expect("ordered");
+    assert!(ordered.iter().any(|c| c["songId"] == json!(song_a)), "{data}");
+
+    // Roll it: the play happens through the normal path, so the player
+    // frame and now-playing hub both see it.
+    let data = result_of(call(&app, "autodj_play_next", json!({})).await);
+    assert_eq!(data["now"]["song_id"], json!(song_a), "{data}");
+    assert!(app.engine.is_playing(radiocraft_server::state::MAIN_ZONE));
+    assert_eq!(app.autodj_last_song(), Some(song_a as i64));
+    let plan = &data["plan"];
+    assert_eq!(plan["pick"]["songId"], json!(song_a), "{plan}");
+
+    let data = result_of(call(&app, "stop", json!({})).await);
+    assert_eq!(data, json!({}));
+
+    // Repeat-rule guard: the same track may not be chosen twice in a row,
+    // so with only one candidate in the pool the next slot is empty.
+    let data = result_of(call(&app, "autodj_plan", json!({})).await);
+    assert_eq!(data["pick"], json!(null), "{data}");
+    assert_eq!(data["lastPickSongId"], json!(song_a), "{data}");
+    let rejected = data["rejected"].as_array().expect("rejected");
+    assert!(
+        rejected
+            .iter()
+            .any(|r| r["songId"] == json!(song_a) && r["reason"] == json!("SameTrackAsLast")),
+        "{data}"
+    );
+
+    // Cleanup.
+    let db = app.require_db().await.expect("db");
+    sqlx::query("DELETE FROM history WHERE trackID = ?")
+        .bind(song_a as u32)
+        .execute(db.pool())
+        .await
+        .expect("scrub history");
+    radiocraft_db::entities::delete_criteria(db.pool(), criteria_id)
+        .await
+        .expect("delete criteria");
+    radiocraft_db::entities::delete_rotation(db.pool(), rotation_id)
+        .await
+        .expect("delete rotation");
+    sqlx::query("DELETE FROM subcategory WHERE ID = ?")
+        .bind(subcat_id)
+        .execute(db.pool())
+        .await
+        .expect("delete subcategory");
+    drop(db);
+    let data = result_of(call(&app, "library_delete", json!({"songId": song_a})).await);
     assert_eq!(data["removed"], json!(1));
     let _ = std::fs::remove_file(&file);
 }

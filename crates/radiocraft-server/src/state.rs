@@ -207,8 +207,22 @@ pub struct App {
     /// Cartwall button currently rolled on the cart zone (RadioDJ's
     /// `CartStarted` equivalent); the cart zone never touches `now`.
     cart_now: std::sync::RwLock<Option<CartNow>>,
+    /// AutoDJ switch/tuning (mirrors `AutoDJStart` in the old app).
+    autodj: AutodjState,
     pub status: RwLock<Status>,
     pub tx: broadcast::Sender<Frame>,
+}
+
+/// AutoDJ runtime state: the enable switch (seeded from
+/// `GeneralSettings.auto_dj_start`), the core scheduler's tuning knobs,
+/// the last auto-pick (for the no-consecutive-repeat rule), and an
+/// in-flight flag so pump ticks never overlap fills.
+#[derive(Debug, Default)]
+struct AutodjState {
+    enabled: std::sync::atomic::AtomicBool,
+    config: std::sync::Mutex<radiocraft_core::scheduler::SchedulerConfig>,
+    last_pick: std::sync::Mutex<Option<i64>>,
+    filling: std::sync::atomic::AtomicBool,
 }
 
 /// The active cartwall button, mirroring RadioDJ cart semantics: one cart
@@ -269,6 +283,10 @@ impl App {
         };
 
         let (tx, _) = broadcast::channel(256);
+        let autodj = AutodjState {
+            enabled: std::sync::atomic::AtomicBool::new(*general.auto_dj_start()),
+            ..AutodjState::default()
+        };
         Ok(Self {
             started: Instant::now(),
             config_dir: config_dir.to_path_buf(),
@@ -279,6 +297,7 @@ impl App {
             db_cfg: RwLock::new(db_config_from(&database)),
             now: std::sync::RwLock::new(None),
             cart_now: std::sync::RwLock::new(None),
+            autodj,
             status: RwLock::new(Status::info("Not connected to the database")),
             tx,
         })
@@ -395,6 +414,50 @@ impl App {
         if stale {
             self.on_track_finished().await;
         }
+    }
+
+    // ---- autodj --------------------------------------------------------------
+
+    /// Whether the AutoDJ fill is enabled (`AutoDJStart`).
+    pub fn autodj_enabled(&self) -> bool {
+        self.autodj.enabled.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// Flip the in-memory switch (the persisted key is the caller's job).
+    pub fn set_autodj_enabled(&self, enabled: bool) {
+        self.autodj
+            .enabled
+            .store(enabled, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// Current scheduler tuning knobs.
+    pub fn autodj_config(&self) -> radiocraft_core::scheduler::SchedulerConfig {
+        self.autodj.config.lock().expect("autodj config lock").clone()
+    }
+
+    /// Replace the scheduler tuning knobs.
+    pub fn set_autodj_config(&self, config: radiocraft_core::scheduler::SchedulerConfig) {
+        *self.autodj.config.lock().expect("autodj config lock") = config;
+    }
+
+    /// Last song AutoDJ rolled (for the no-consecutive-repeat rule).
+    pub fn autodj_last_song(&self) -> Option<i64> {
+        *self.autodj.last_pick.lock().expect("autodj last-pick lock")
+    }
+
+    /// Remember an AutoDJ pick.
+    pub fn note_autodj_pick(&self, song_id: i64) {
+        *self.autodj.last_pick.lock().expect("autodj last-pick lock") = Some(song_id);
+    }
+
+    /// Claim the single in-flight fill slot; false when one is running.
+    pub fn begin_autodj_fill(&self) -> bool {
+        !self.autodj.filling.swap(true, std::sync::atomic::Ordering::AcqRel)
+    }
+
+    /// Release the fill slot.
+    pub fn end_autodj_fill(&self) {
+        self.autodj.filling.store(false, std::sync::atomic::Ordering::Release);
     }
 
     // ---- cart zone -----------------------------------------------------------

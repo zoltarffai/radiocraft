@@ -5,6 +5,7 @@
 //! protocol in [`frames`] and the REST surface in [`http`].
 
 pub mod auth;
+pub mod autodj;
 pub mod dispatch;
 pub mod frames;
 pub mod grid;
