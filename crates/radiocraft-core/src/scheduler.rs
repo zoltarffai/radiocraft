@@ -244,6 +244,7 @@ pub struct SchedulerDecision {
 
 /// Scheduler tuning knobs.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct SchedulerConfig {
     /// Enforce `play_limit = 0 OR count_played < play_limit`.
     pub respect_play_limit: bool,
