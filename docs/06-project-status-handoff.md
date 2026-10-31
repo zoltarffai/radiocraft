@@ -1,7 +1,8 @@
 # Project status & handoff — RadioCraft
 
-Snapshot date: 2026-10-31. Latest code commit: `717c412` (only docs/README-only
-commits follow it). No tags exist yet; branch is `master`. This document is the
+Snapshot date: 2026-10-31. Latest code commits: `9fc8b5a` (AutoDJ server wiring) plus the
+AutoDJ web panel; `717c412` was the last pre-AutoDJ milestone. No tags exist yet; branch is
+`master`. This document is the
 single source of truth for "where everything stands" when a fresh session
 starts. Read it together with:
 
@@ -110,7 +111,10 @@ play_history` (rewind = re-add to library, returns `{"restored":id}`); playlists
 `playlist_create playlist_rename playlist_delete playlist_add_item playlist_remove_item
 playlist_move_item playlist_set_cues playlist_set_song`; queue
 `list_queue queue_add_song queue_add_file queue_remove queue_clear queue_eta_set
-queue_move` (ETA swap, args `{queueId,with}`); transport extra `play_next`.
+queue_move` (ETA swap, args `{queueId,with}`); transport extra `play_next`; AutoDJ
+`autodj_set` (args `{enabled, config?}` → `{enabled,config}`), `autodj_status`
+(`{enabled,lastPickSongId,config}`), `autodj_plan` (dry run → `{rotationId,rotationName,
+criteriaId,pick,ordered,rejected,lastPickSongId}`), `autodj_play_next` (`{now,plan}`).
 
 Cart play parity (`play_cart`, mirrors `Plugin_InstantPlayers/CartButtonControl.set_PlayCart`):
 args `{buttonId}` or `{cartId,"number":slot}` (+ optional `fade` ms). Press rolls the linked
@@ -186,9 +190,17 @@ panel (add/remove/clear/ETA/swap), history window (filter/delete/rewing play,
 commands.rs` (offline op-surface tests + live-DB round trip gated on `RC_DB_TEST_DSN`,
 see §9).
 
+AutoDJ is now wired end-to-end: `radiocraft-db::autodj` executes rotation criteria SQL into
+`TrackCandidate`s, `radiocraft-server::autodj` plans slots with the core `Scheduler`
+(two-phase pool fetch), the pump auto-fills the main zone on idle (5 s backoff), and the
+web UI has an AutoDJ panel (toggle, knobs, plan preview, play-next). Ops: `autodj_set` /
+`autodj_status` / `autodj_plan` / `autodj_play_next`; the switch persists as the
+`AutoDJStart` general setting. Rotation/criteria *editors* in the web UI are still open.
+
 Still open:
 
-1. AutoDJ exposure over WS (scheduler is implemented in core but not surface-driven).
+1. Rotation/criteria editors in the web UI (CRUD over `rotations_list`/`criteria`; the DB
+   executor already round-trips full core `RotationCriteria` JSON in `rotations_list.data`).
 2. Settings editors (sound device, scheduler, now-playing export config).
 3. REST mirrors for the new parity ops (currently WS-only; REST keeps the read-only set).
 4. Packaging for the shell: `cargo tauri build` deb/rpm job (bundle config already in

@@ -9,6 +9,7 @@
   import HistoryPanel from "./lib/HistoryPanel.svelte";
   import QueuePanel from "./lib/QueuePanel.svelte";
   import PlaylistEditor from "./lib/PlaylistEditor.svelte";
+  import AutoDJPanel from "./lib/AutoDJPanel.svelte";
 
   onMount(() => {
     session.start();
@@ -34,6 +35,7 @@
     <section class="col top">
       <NowPlaying />
       <ZoneMixer />
+      <AutoDJPanel />
     </section>
     <section class="col top">
       <Database />

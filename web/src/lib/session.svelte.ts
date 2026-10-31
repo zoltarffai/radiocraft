@@ -4,6 +4,8 @@
 //! id and server pushes update the `$state` fields components read.
 
 import type {
+  AutodjPlan,
+  AutodjStatus,
   CartButtonRow,
   CartHeader,
   CartNowInfo,
@@ -17,6 +19,7 @@ import type {
   PlaylistHeader,
   PlaylistItemRow,
   QueueRow,
+  SchedulerConfig,
   SongFull,
   SongRow,
   StatusInfo,
@@ -74,6 +77,13 @@ class Session {
   /** Row count of the last library_filter/history_filter (pagination). */
   libraryTotal = $state(0);
   historyTotal = $state(0);
+
+  /** AutoDJ switch + knobs (autodj_status / autodj_set). */
+  autodjEnabled = $state(false);
+  autodjLastPick = $state<number | null>(null);
+  autodjConfig = $state<SchedulerConfig | null>(null);
+  /** Last autodj_plan dry-run payload, shown by the AutoDJ panel. */
+  autodjPlan = $state<AutodjPlan | null>(null);
 
   /** Reactive log of the last error frame, for the toast strip. */
   lastError = $state<string | null>(null);
@@ -300,6 +310,35 @@ class Session {
   }
   playlistSetSong(itemId: number, songId: number): Promise<unknown> {
     return this.cmd("playlist_set_song", { itemId, songId });
+  }
+
+  // ---- autodj ops -------------------------------------------------------------
+
+  /** Refresh the AutoDJ switch + knobs from the server. */
+  async refreshAutodj(): Promise<void> {
+    const r = await this.cmd<AutodjStatus>("autodj_status");
+    this.autodjEnabled = r.enabled;
+    this.autodjLastPick = r.lastPickSongId ?? null;
+    this.autodjConfig = r.config;
+  }
+  /** Toggle AutoDJ (persisted server-side); optionally retune in one call. */
+  async setAutodj(enabled: boolean, config?: Partial<SchedulerConfig>): Promise<void> {
+    const args: Record<string, unknown> = { enabled };
+    if (config) args.config = config;
+    const r = await this.cmd<AutodjStatus>("autodj_set", args);
+    this.autodjEnabled = r.enabled;
+    this.autodjConfig = r.config;
+  }
+  /** Dry-run the next planned slot; result lands in `autodjPlan`. */
+  async autodjPlanNext(): Promise<void> {
+    this.autodjPlan = await this.cmd<AutodjPlan>("autodj_plan");
+    this.autodjLastPick = this.autodjPlan.lastPickSongId ?? null;
+  }
+  /** Plan and roll the next pick now. */
+  async autodjPlayNext(): Promise<void> {
+    const r = await this.cmd<{ plan: AutodjPlan }>("autodj_play_next");
+    this.autodjPlan = r.plan;
+    this.autodjLastPick = r.plan.lastPickSongId ?? null;
   }
 
   // ---- play queue ops ---------------------------------------------------------

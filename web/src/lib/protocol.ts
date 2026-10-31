@@ -236,6 +236,61 @@ export interface CartButtonRow {
   duration?: string | null;
 }
 
+/** Tuning knobs the scheduler applies when planning (autodj_* ops). */
+export interface SchedulerConfig {
+  respect_play_limit: boolean;
+  respect_repeat_intervals: boolean;
+  respect_availability: boolean;
+  forced_song_type: number | null;
+  max_candidates: number | null;
+}
+
+/** AutoDJ state (autodj_status / autodj_set results). */
+export interface AutodjStatus {
+  enabled: boolean;
+  lastPickSongId: number | null;
+  config: SchedulerConfig;
+}
+
+/** Planned song slot (autodj_plan `pick`). */
+export interface AutodjPick {
+  songId: number;
+  artist: string;
+  title: string;
+  album: string;
+  path: string;
+  duration: number;
+  weight: number;
+  sweeperBefore: AutodjSweeper | null;
+  sweeperWithin: AutodjSweeper | null;
+  voiceTrack: AutodjSweeper | null;
+  sweeperOffset: number;
+}
+
+export interface AutodjSweeper {
+  songId: number;
+  title: string;
+  path: string;
+  duration: number;
+}
+
+/** One candidate the scheduler rejected, with the reason. */
+export interface AutodjRejection {
+  songId: number;
+  reason: string;
+}
+
+/** autodj_plan / autodj_play_next `plan` payload. */
+export interface AutodjPlan {
+  rotationId: number | null;
+  rotationName: string | null;
+  criteriaId: number | null;
+  pick: AutodjPick | null;
+  ordered: Array<{ songId: number; title: string; artist: string }>;
+  rejected: AutodjRejection[];
+  lastPickSongId: number | null;
+}
+
 export interface DbConfigView {
   host: string;
   port: number;
