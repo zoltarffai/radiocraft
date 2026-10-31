@@ -62,7 +62,7 @@ export type Frame =
     }
   | ({ t: "result"; id: number; op: string } & Record<string, unknown>)
   | { t: "error"; id: number | null; code: string; message: string }
-  | { t: "player"; now: NowInfo | null; zones: ZoneState[] }
+  | { t: "player"; now: NowInfo | null; zones: ZoneState[]; cart: CartNowInfo | null }
   | { t: "meters"; master: LevelInfo; zones: ZoneState[] }
   | { t: "state"; master_db: DbWire; zones: ZoneMix[] }
   | ({ t: "status" } & StatusInfo)
@@ -211,6 +211,17 @@ export interface PlaylistItemRow {
 export interface CartHeader {
   ID: number;
   name: string;
+}
+
+/** Cartwall button currently rolled on the cart zone (player frame `cart`). */
+export interface CartNowInfo {
+  /** carts_list.ID of the button. */
+  button_id: number;
+  /** carts.ID of the cart wall it belongs to. */
+  cart_id: number;
+  /** songs.ID of the linked track. */
+  song_id: number;
+  title: string;
 }
 
 export interface CartButtonRow {

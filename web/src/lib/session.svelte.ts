@@ -6,6 +6,7 @@
 import type {
   CartButtonRow,
   CartHeader,
+  CartNowInfo,
   ClientMsg,
   DbConfigView,
   Frame,
@@ -66,6 +67,8 @@ class Session {
   playlistItems = $state<PlaylistItemRow[]>([]);
   carts = $state<CartHeader[]>([]);
   cartButtons = $state<CartButtonRow[]>([]);
+  /** Cartwall button currently rolled on the cart zone (from player frames). */
+  cartNow = $state<CartNowInfo | null>(null);
   queue = $state<QueueRow[]>([]);
   history = $state<HistoryRow[]>([]);
   /** Row count of the last library_filter/history_filter (pagination). */
@@ -343,6 +346,7 @@ class Session {
       case "player":
         this.now = f.now;
         this.zones = f.zones;
+        this.cartNow = f.cart;
         break;
       case "meters":
         this.master = f.master;
