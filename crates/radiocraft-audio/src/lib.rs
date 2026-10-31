@@ -53,7 +53,7 @@ pub const SAMPLE_RATE: usize = 44_100;
 /// Internal mix-bps sample format helper (interleaved stereo f32).
 pub const CHANNELS: usize = 2;
 
-// Convenience re-exports — the surface the GUI (radiocraft-app) links against.
+// Convenience re-exports — the surface the server/engine links against.
 pub use decoder::{FileSource, MemorySource, SilentSource, Source, sine_source};
 pub use device::{
     AudioSink, CpalSink, DeviceManager, NullSink, SinkInfo, WavSink,

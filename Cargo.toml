@@ -7,7 +7,6 @@ members = [
   "crates/radiocraft-settings",
   "crates/radiocraft-net",
   "crates/radiocraft-plugin",
-  "crates/radiocraft-app",
   "crates/radiocraft-server",
 ]
 

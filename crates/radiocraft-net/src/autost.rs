@@ -111,6 +111,15 @@ impl ClosePolicy {
     }
 }
 
+/// Human sentence for a close decision (migrated from the old egui shell's
+/// `windows.rs`; the close window's preview pane renders it).
+pub fn close_action_label(action: CloseAction) -> &'static str {
+    match action {
+        CloseAction::HideToTray => "the window will hide; the application keeps running",
+        CloseAction::Exit => "the application will exit",
+    }
+}
+
 /// A running AutoBackup scheduler; call [`AutoBackupScheduler::stop`] to end it.
 pub struct AutoBackupScheduler {
     stop: Arc<AtomicBool>,
@@ -243,6 +252,12 @@ mod tests {
         assert_eq!(p.on_close(true), CloseAction::Exit);
         let p = ClosePolicy::from_settings(&db(false, 22));
         assert_eq!(p.on_close(false), CloseAction::Exit);
+    }
+
+    #[test]
+    fn close_action_label_matches_variants() {
+        assert!(close_action_label(CloseAction::HideToTray).contains("hide"));
+        assert!(close_action_label(CloseAction::Exit).contains("exit"));
     }
 
     #[test]

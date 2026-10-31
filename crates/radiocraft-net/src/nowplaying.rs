@@ -264,6 +264,161 @@ impl ExportConfig {
     }
 }
 
+/// RadioDJ numeric code for a file encoding (the `FileEncoding` plugin key).
+pub fn encoding_code(e: FileEncoding) -> i32 {
+    match e {
+        FileEncoding::Ansi => 0,
+        FileEncoding::Utf8 => 1,
+        FileEncoding::Utf16 => 2,
+    }
+}
+
+/// The options-form form of the export settings, kept as plain editable
+/// strings/lists (migrated from the old egui shell's `windows.rs`). Save
+/// flows go through [`ExportDraft::to_keys`], which re-encodes the web
+/// items into the `WebItems` XML blob RadioDJ stores.
+#[derive(Clone, Debug)]
+pub struct ExportDraft {
+    pub export_to_file: bool,
+    pub target_path: String,
+    /// 0 = ANSI, 1 = UTF-8, 2 = UTF-16 (RadioDJ `FileEncoding`).
+    pub encoding: i32,
+    pub txt_file_template: String,
+
+    pub export_to_web: bool,
+    pub web_urls: Vec<String>,
+    pub web_methods: Vec<String>,
+    pub target_data: String,
+
+    pub export_to_serial: bool,
+    pub serial_template: String,
+    pub target_port: String,
+    pub serial_baud: i32,
+    pub serial_parity: i32,
+    pub serial_stop: i32,
+    pub serial_data: i32,
+    pub serial_dtr: bool,
+    pub serial_rts: bool,
+
+    pub enable_custom_title: bool,
+    pub custom_title: String,
+    /// `0;1;5;` style track-type list kept as raw text.
+    pub types_text: String,
+}
+
+impl Default for ExportDraft {
+    fn default() -> Self {
+        Self {
+            export_to_file: false,
+            target_path: String::new(),
+            encoding: 1,
+            txt_file_template: String::new(),
+            export_to_web: false,
+            web_urls: Vec::new(),
+            web_methods: Vec::new(),
+            target_data: "-".to_string(),
+            export_to_serial: false,
+            serial_template: String::new(),
+            target_port: String::new(),
+            serial_baud: 1,
+            serial_parity: 0,
+            serial_stop: 1,
+            serial_data: 8,
+            serial_dtr: false,
+            serial_rts: false,
+            enable_custom_title: false,
+            custom_title: String::new(),
+            types_text: String::new(),
+        }
+    }
+}
+
+impl ExportDraft {
+    pub fn from_config(cfg: &ExportConfig) -> Self {
+        ExportDraft {
+            export_to_file: cfg.export_to_file,
+            target_path: cfg.target_path.clone(),
+            encoding: encoding_code(cfg.file_encoding),
+            txt_file_template: cfg.txt_file_template.clone(),
+            export_to_web: cfg.export_to_web,
+            web_urls: cfg.web_items.iter().map(|i| i.url.clone()).collect(),
+            web_methods: cfg.web_items.iter().map(|i| i.method.clone()).collect(),
+            target_data: cfg.target_data.clone(),
+            export_to_serial: cfg.export_to_serial,
+            serial_template: cfg.serial_template.clone(),
+            target_port: cfg.target_port.clone(),
+            serial_baud: cfg.serial_baud,
+            serial_parity: cfg.serial_parity,
+            serial_stop: cfg.serial_stop,
+            serial_data: cfg.serial_data,
+            serial_dtr: cfg.serial_dtr,
+            serial_rts: cfg.serial_rts,
+            enable_custom_title: cfg.enable_custom_title,
+            custom_title: cfg.custom_title.clone(),
+            types_text: cfg
+                .types_to_export
+                .iter()
+                .map(|t| *t as i32)
+                .map(|i| i.to_string())
+                .collect::<Vec<String>>()
+                .join(";"),
+        }
+    }
+
+    /// The plugin key/values this draft stands for.
+    pub fn to_keys(&self) -> Vec<(&'static str, String)> {
+        let items: Vec<WebItem> = self
+            .web_urls
+            .iter()
+            .zip(self.web_methods.iter())
+            .filter(|(url, _)| !url.trim().is_empty())
+            .map(|(url, method)| WebItem {
+                url: url.trim().to_string(),
+                method: if method.eq_ignore_ascii_case("get") {
+                    "get".to_string()
+                } else {
+                    "post".to_string()
+                },
+            })
+            .collect();
+        let web_items = if items.is_empty() {
+            String::new()
+        } else {
+            let mut xml = String::from("<items>");
+            for item in &items {
+                xml.push_str(&format!(
+                    "<item url=\"{}\" method=\"{}\" />",
+                    item.url.replace('"', "&quot;"),
+                    item.method
+                ));
+            }
+            xml.push_str("</items>");
+            xml
+        };
+        vec![
+            ("Export2File", self.export_to_file.to_string()),
+            ("TargetPath", self.target_path.clone()),
+            ("FileEncoding", self.encoding.to_string()),
+            ("txtFileTemplate", self.txt_file_template.clone()),
+            ("Export2Web", self.export_to_web.to_string()),
+            ("WebItems", web_items),
+            ("TargetData", self.target_data.clone()),
+            ("Export2Serial", self.export_to_serial.to_string()),
+            ("SerialTemplate", self.serial_template.clone()),
+            ("TargetPort", self.target_port.clone()),
+            ("SerialBaudRate", self.serial_baud.to_string()),
+            ("SerialParity", self.serial_parity.to_string()),
+            ("SerialStopBits", self.serial_stop.to_string()),
+            ("SerialDataBits", self.serial_data.to_string()),
+            ("Serialdtr", self.serial_dtr.to_string()),
+            ("Serialrts", self.serial_rts.to_string()),
+            ("EnableCustomTitle", self.enable_custom_title.to_string()),
+            ("CustomTitle", self.custom_title.clone()),
+            ("TypesToExport", self.types_text.clone()),
+        ]
+    }
+}
+
 /// The now-playing snapshot the exporter broadcasts.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct NowPlayingSnapshot {
@@ -716,5 +871,62 @@ mod tests {
         assert_eq!(cfg.types_to_export.len(), 10);
         assert!(cfg.types_to_export.contains(&TrackType::Music));
         assert!(!cfg.types_to_export.contains(&TrackType::PlaylistEvent)); // 11 not in list
+    }
+
+    #[test]
+    fn encoding_codes_round_trip() {
+        assert_eq!(encoding_code(FileEncoding::Ansi), 0);
+        assert_eq!(encoding_code(FileEncoding::Utf8), 1);
+        assert_eq!(encoding_code(FileEncoding::Utf16), 2);
+        // The From<i32> mapping round-trips for the well-known codes.
+        assert_eq!(
+            FileEncoding::from(encoding_code(FileEncoding::Ansi)),
+            FileEncoding::Ansi
+        );
+        assert_eq!(
+            FileEncoding::from(encoding_code(FileEncoding::Utf16)),
+            FileEncoding::Utf16
+        );
+    }
+
+    #[test]
+    fn export_draft_keys_round_trip_web_items() {
+        let draft = ExportDraft {
+            export_to_file: true,
+            target_path: "C:\\nowplaying.txt".to_string(),
+            encoding: 2,
+            web_urls: vec![
+                "http://host/a".to_string(),
+                "http://host/b".to_string(),
+                "  ".to_string(),
+            ],
+            web_methods: vec!["post".to_string(), "GET".to_string(), "post".to_string()],
+            ..Default::default()
+        };
+        let keys = draft.to_keys();
+        let get = |k: &str| {
+            keys.iter()
+                .find(|(key, _)| *key == k)
+                .map(|(_, v)| v.clone())
+                .unwrap()
+        };
+        assert_eq!(get("Export2File"), "true");
+        assert_eq!(get("FileEncoding"), "2");
+        let xml = get("WebItems");
+        // The blank url is dropped, and the GET method is normalized.
+        assert_eq!(
+            xml,
+            "<items><item url=\"http://host/a\" method=\"post\" />\
+             <item url=\"http://host/b\" method=\"get\" /></items>"
+        );
+    }
+
+    #[test]
+    fn export_draft_from_config_pulls_types() {
+        let cfg = config();
+        let draft = ExportDraft::from_config(&cfg);
+        assert_eq!(draft.types_text, "0;1");
+        assert_eq!(draft.encoding, 1);
+        assert!(draft.export_to_file);
     }
 }

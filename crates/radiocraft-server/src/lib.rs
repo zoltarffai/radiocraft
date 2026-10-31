@@ -7,8 +7,10 @@
 pub mod auth;
 pub mod dispatch;
 pub mod frames;
+pub mod grid;
 pub mod http;
 pub mod playback;
+pub mod playlist;
 pub mod pump;
 pub mod state;
 pub mod ws;

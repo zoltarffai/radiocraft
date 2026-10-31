@@ -4,4 +4,4 @@ set -euo pipefail
 export PATH="$HOME/.cargo/bin:$PATH"
 cd "$(dirname "$0")/.."
 cargo check --workspace
-cargo test --workspace --exclude radiocraft-app
+cargo test --workspace

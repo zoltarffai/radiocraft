@@ -265,6 +265,39 @@ mod tests {
     }
 
     #[test]
+    fn apply_marks_missing_fades_with_the_default_marker() {
+        let source = Box::new(radiocraft_audio::decoder::MemorySource::from_mono(
+            &[0.0; 8],
+            44_100.0,
+        ));
+        let plan = CuePlan {
+            start_at: Some(2.0),
+            vdf_target: Some(30.0),
+            stop_at: None,
+            fade_in_ms: Some(400),
+            fade_out_ms: None,
+        };
+        let req = plan.apply(PlayRequest::new(source));
+        assert_eq!(req.fade_in_ms, 400);
+        assert_eq!(req.fade_out_ms, -1);
+        assert_eq!(req.start_at_secs, Some(2.0));
+        assert_eq!(req.vdf_target_secs, Some(30.0));
+    }
+
+    #[test]
+    fn apply_without_cues_leaves_the_request_untouched() {
+        let source = Box::new(radiocraft_audio::decoder::MemorySource::from_mono(
+            &[0.0; 8],
+            44_100.0,
+        ));
+        let req = CuePlan::default().apply(PlayRequest::new(source));
+        assert_eq!(req.fade_in_ms, 0);
+        assert_eq!(req.fade_out_ms, -1);
+        assert_eq!(req.start_at_secs, None);
+        assert_eq!(req.vdf_target_secs, None);
+    }
+
+    #[test]
     fn stop_at_relative_to_start() {
         let knobs = CueKnobs {
             start: 5.0,

@@ -16,8 +16,8 @@ pub mod webserver;
 
 pub use autost::{AutoBackupConfig, AutoBackupScheduler, BackupSink, CloseAction, ClosePolicy};
 pub use nowplaying::{
-    ExportConfig, ExportError, FileEncoding, NowPlayingExporter, NowPlayingSnapshot, SerialWriter,
-    WebItem,
+    encoding_code, ExportConfig, ExportDraft, ExportError, FileEncoding, NowPlayingExporter,
+    NowPlayingSnapshot, SerialWriter, WebItem,
 };
 pub use webserver::{
     NowPlayingProvider, RequestSink, RequestSubmission, WebError, WebServer, WebServerConfig,
