@@ -12,6 +12,8 @@ import type {
   ClientMsg,
   CriteriaRow,
   DbConfigView,
+  ExportDraftView,
+  ExportTestResult,
   Frame,
   HistoryRow,
   LevelInfo,
@@ -23,6 +25,9 @@ import type {
   QueueRow,
   RotationHeader,
   SchedulerConfig,
+  SinkInfo,
+  SoundcardsView,
+  SoundOptions,
   SongFull,
   SongRow,
   StatusInfo,
@@ -80,6 +85,18 @@ class Session {
   /** Row count of the last library_filter/history_filter (pagination). */
   libraryTotal = $state(0);
   historyTotal = $state(0);
+
+  // ---- settings-editor state (list_devices / *_get / *_set ops) -------------
+  /** Output device names from the audio backend. */
+  devices = $state<string[]>([]);
+  /** The sink currently feeding playout. */
+  sink = $state<SinkInfo | null>(null);
+  soundcards = $state<SoundcardsView | null>(null);
+  soundOptions = $state<SoundOptions | null>(null);
+  /** Now-playing export draft (export_get / export_set). */
+  exportDraft = $state<ExportDraftView | null>(null);
+  /** Last export_test payload. */
+  exportTest = $state<ExportTestResult | null>(null);
 
   /** AutoDJ switch + knobs (autodj_status / autodj_set). */
   autodjEnabled = $state(false);
@@ -387,6 +404,50 @@ class Session {
       subcategories: r.subcategories ?? [],
       genres: r.genres ?? [],
     };
+  }
+
+  // ---- settings-editor ops ----------------------------------------------------
+
+  /** Refresh output devices + the active sink. */
+  async loadDevices(): Promise<void> {
+    const r = await this.cmd<{ devices: string[]; current: SinkInfo }>("list_devices");
+    this.devices = r.devices ?? [];
+    this.sink = r.current ?? null;
+  }
+  /** Switch the live output device (empty/`null` = system default). */
+  async setDevice(name: string | null): Promise<void> {
+    const r = await this.cmd<{ current: SinkInfo }>("set_device", { name });
+    this.sink = r.current;
+  }
+  async loadSoundcards(): Promise<void> {
+    this.soundcards = (await this.cmd<SoundcardsView>("soundcards_get")) as SoundcardsView;
+  }
+  /** Patch any subset of `{audioMode, inputFadeIn, inputFadeOut}`. */
+  async setSoundcards(patch: {
+    audioMode?: number;
+    inputFadeIn?: number;
+    inputFadeOut?: number;
+  }): Promise<void> {
+    this.soundcards = (await this.cmd<SoundcardsView>("soundcards_set", patch)) as SoundcardsView;
+  }
+  async loadSoundOptions(): Promise<void> {
+    this.soundOptions = (await this.cmd<SoundOptions>("sound_options_get")) as SoundOptions;
+  }
+  /** Patch any subset of the `settings_general.xml` knobs. */
+  async setSoundOptions(patch: Partial<SoundOptions>): Promise<void> {
+    this.soundOptions = (await this.cmd<SoundOptions>("sound_options_set", patch)) as SoundOptions;
+  }
+  async loadExportDraft(): Promise<void> {
+    const r = await this.cmd<{ export: ExportDraftView }>("export_get");
+    this.exportDraft = r.export ?? null;
+  }
+  async saveExportDraft(draft: ExportDraftView): Promise<void> {
+    const r = await this.cmd<{ export: ExportDraftView }>("export_set", { export: draft });
+    this.exportDraft = r.export ?? draft;
+  }
+  /** Fire the exporter once (live track or sample) and show what it rendered. */
+  async testExport(): Promise<void> {
+    this.exportTest = (await this.cmd<ExportTestResult>("export_test")) as ExportTestResult;
   }
 
   // ---- play queue ops ---------------------------------------------------------

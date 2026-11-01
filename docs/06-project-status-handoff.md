@@ -206,13 +206,26 @@ editor: category/subcategory/genre pickers with include/exclude polarity, day ma
 times, weight floor, four repeat intervals, selection mode, duplicate). Live WS smoke:
 `/tmp/opencode/rc-rotation-smoke.mjs`.
 
+Settings editors (the XML-backed Options surface) are closed: backend ops in
+`radiocraft-server/src/settings.rs` (`list_devices` / `set_device` / `soundcards_get` /
+`soundcards_set` / `sound_options_get` / `sound_options_set` / `export_get` / `export_set` /
+`export_test`) — every write persists to the XML store first, then re-applies live (engine
+sink swap via `PlayoutEngine::set_sink`, knob re-apply through `set_general_setting`,
+exporter rebuild). The chosen device persists as the `audio_device` extra key in
+`settings_soundcards.xml`; the now-playing draft round-trips `Plugins/Plugin_NowPlaying.xml`
+(file/web/serial channels, templates, custom title, track-type list). Offline tests:
+`crates/radiocraft-server/tests/settings_ops.rs`; live WS smoke:
+`/tmp/opencode/rc-settings-smoke.mjs`. Web panel `web/src/lib/SettingsPanel.svelte`
+(Sound tab: device picker, sound-card fades, sound-option knobs; Now-playing tab: full
+export editor with per-row URL/method list and Test-export snapshot readout). Scheduler
+options are the AutoDJ panel's knobs (`SchedulerConfig` via `autodj_set`), already shipped.
+
 Still open:
 
-1. Settings editors (sound device, scheduler, now-playing export config).
-2. REST mirrors for the new parity ops (currently WS-only; REST keeps the read-only set).
-3. Packaging for the shell: `cargo tauri build` deb/rpm job (bundle config already in
+1. REST mirrors for the new parity ops (currently WS-only; REST keeps the read-only set).
+2. Packaging for the shell: `cargo tauri build` deb/rpm job (bundle config already in
    `tauri.conf.json`: targets deb/rpm, identifier `dev.radiocraft.window`).
-4. Cosmetic: on shell exit two benign GTK teardown warnings (appindicator known quirk) +
+3. Cosmetic: on shell exit two benign GTK teardown warnings (appindicator known quirk) +
    libayatana deprecation warning — harmless.
 
 Deferred fidelity checks (optional): cross-check `LoudnessCalculator.cs`, Plugin_SoundProcessing

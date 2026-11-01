@@ -356,6 +356,69 @@ export interface DbConfigView {
   password: string;
 }
 
+/** Active audio sink (`radiocraft-audio::device::SinkInfo`). */
+export interface SinkInfo {
+  name: string;
+  sample_rate: number;
+  channels: number;
+  is_device: boolean;
+}
+
+/** `soundcards_get` / `soundcards_set` payload. */
+export interface SoundcardsView {
+  audio_mode: number;
+  input_fade_in: number;
+  input_fade_out: number;
+  audio_device: string;
+  current: SinkInfo;
+}
+
+/** `sound_options_get/set` payload (keys of `settings_general.xml`). */
+export interface SoundOptions {
+  volume_out: number;
+  dur_fadeout: number;
+  vol_overlay: number;
+  vol_onsweeper: number;
+  vol_vt: number;
+}
+
+/** Now-playing export form (`radiocraft-net::nowplaying::ExportDraft`). */
+export interface ExportDraftView {
+  export_to_file: boolean;
+  target_path: string;
+  /** 0 = ANSI, 1 = UTF-8, 2 = UTF-16. */
+  encoding: number;
+  txt_file_template: string;
+
+  export_to_web: boolean;
+  web_urls: string[];
+  web_methods: string[];
+  target_data: string;
+
+  export_to_serial: boolean;
+  serial_template: string;
+  target_port: string;
+  serial_baud: number;
+  serial_parity: number;
+  serial_stop: number;
+  serial_data: number;
+  serial_dtr: boolean;
+  serial_rts: boolean;
+
+  enable_custom_title: boolean;
+  custom_title: string;
+  /** `0;1;5;` style track-type list kept as raw text. */
+  types_text: string;
+}
+
+/** `export_test` payload. */
+export interface ExportTestResult {
+  snapshot: Record<string, unknown>;
+  file: boolean;
+  web: boolean;
+  serial: boolean;
+}
+
 /** Decode a dB wire value: `null` means digital silence. */
 export function dbFromWire(v: DbWire): number {
   return v === null || v === undefined ? -Infinity : v;
