@@ -14,6 +14,7 @@ pub mod playback;
 pub mod rotations;
 pub mod playlist;
 pub mod pump;
+pub mod settings;
 pub mod run;
 pub mod state;
 pub mod ws;

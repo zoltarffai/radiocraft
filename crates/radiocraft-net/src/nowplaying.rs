@@ -276,8 +276,9 @@ pub fn encoding_code(e: FileEncoding) -> i32 {
 /// The options-form form of the export settings, kept as plain editable
 /// strings/lists (migrated from the old egui shell's `windows.rs`). Save
 /// flows go through [`ExportDraft::to_keys`], which re-encodes the web
-/// items into the `WebItems` XML blob RadioDJ stores.
-#[derive(Clone, Debug)]
+/// items into the `WebItems` XML blob RadioDJ stores. The web settings
+/// editor exchanges the same shape over the wire.
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ExportDraft {
     pub export_to_file: bool,
     pub target_path: String,
@@ -536,11 +537,12 @@ impl NowPlayingExporter {
 
     /// Write the file target. Returns the rendered text (empty when disabled).
     pub fn export_file(&self, ctx: &Context, song: &SongData) -> Result<String, ExportError> {
-        let _ = song;
         if !self.config.export_to_file {
             return Ok(String::new());
         }
-        let text = render(&self.engine, ctx, &self.config.txt_file_template);
+        let mut ctx = ctx.clone();
+        apply_custom_title(&mut ctx, &self.config, song);
+        let text = render(&self.engine, &ctx, &self.config.txt_file_template);
         if self.config.target_path.is_empty() {
             return Ok(text);
         }

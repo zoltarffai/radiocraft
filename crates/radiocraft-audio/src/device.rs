@@ -22,7 +22,7 @@ fn io_err(path: &Path, e: impl std::fmt::Display) -> AudioError {
 }
 
 /// Metadata describing a sink.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct SinkInfo {
     pub name: String,
     pub sample_rate: usize,
@@ -306,6 +306,18 @@ impl DeviceManager {
     /// Open the default output device as a sink.
     pub fn open_default_sink() -> Result<Box<dyn AudioSink>> {
         CpalSink::open_default().map(|s| Box::new(s) as Box<dyn AudioSink>)
+    }
+
+    /// Open an output device by display name (as reported by
+    /// [`DeviceManager::output_device_names`]).
+    pub fn open_named_sink(name: &str) -> Result<Box<dyn AudioSink>> {
+        let host = cpal::default_host();
+        let device = host
+            .output_devices()
+            .map_err(|e| AudioError::Unsupported(e.to_string()))?
+            .find(|d| d.name().ok().as_deref() == Some(name))
+            .ok_or_else(|| AudioError::Unsupported(format!("no such output device: {name}")))?;
+        CpalSink::for_device(&device).map(|s| Box::new(s) as Box<dyn AudioSink>)
     }
 
     /// A headless sink for engine construction without a device.

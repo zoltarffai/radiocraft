@@ -20,7 +20,7 @@ use radiocraft_core::model::SongData;
 use radiocraft_db::config::DbConfig;
 use radiocraft_db::{self as db, Db};
 use radiocraft_net::nowplaying::{ExportConfig, NowPlayingExporter};
-use radiocraft_settings::{DatabaseSettings, GeneralSettings, PluginSettings};
+use radiocraft_settings::{DatabaseSettings, GeneralSettings, PluginSettings, SoundcardSettings};
 use serde::Serialize;
 use tokio::sync::{broadcast, RwLock};
 
@@ -198,7 +198,10 @@ pub struct App {
     pub config_dir: PathBuf,
     pub general: std::sync::RwLock<GeneralSettings>,
     pub engine: PlayoutEngine,
-    pub exporter: Arc<NowPlayingExporter>,
+    /// Rebuildable on the fly (`export_set` swaps it).
+    pub exporter: std::sync::RwLock<Arc<NowPlayingExporter>>,
+    /// Live copy of `Plugins/Plugin_NowPlaying.xml` (now-playing export).
+    pub(crate) plugin_export: std::sync::RwLock<PluginSettings>,
     /// `None` until the operator connects (`dbConnect`).
     pub db: RwLock<Option<Db>>,
     pub db_cfg: RwLock<DbConfig>,
@@ -274,7 +277,24 @@ impl App {
             ExportConfig::from_settings(&plugin_export),
             general.station_name(),
         );
-        let engine = match DeviceManager::open_default_sink() {
+        // Honor a saved soundcard choice (`audio_device` in
+        // settings_soundcards.xml), falling back to the system default.
+        let saved_device = {
+            let path = config_dir.join(radiocraft_settings::SoundcardSettings::FILE);
+            path.exists()
+                .then(|| radiocraft_settings::KvStore::load(&path).ok())
+                .flatten()
+                .and_then(|store| store.get("audio_device").map(str::to_string))
+        };
+        let opened = match saved_device.as_deref().filter(|d| !d.is_empty()) {
+            Some(name) => DeviceManager::open_named_sink(name)
+                .or_else(|e| {
+                    tracing::warn!("saved device {name:?} unavailable ({e}); using default");
+                    DeviceManager::open_default_sink()
+                }),
+            None => DeviceManager::open_default_sink(),
+        };
+        let engine = match opened {
             Ok(sink) => PlayoutEngine::new(engine_config(&general), sink),
             Err(e) => {
                 tracing::warn!("no audio device ({e}); using a null sink");
@@ -292,7 +312,8 @@ impl App {
             config_dir: config_dir.to_path_buf(),
             general: std::sync::RwLock::new(general),
             engine,
-            exporter: Arc::new(exporter),
+            exporter: std::sync::RwLock::new(Arc::new(exporter)),
+            plugin_export: std::sync::RwLock::new(plugin_export),
             db: RwLock::new(None),
             db_cfg: RwLock::new(db_config_from(&database)),
             now: std::sync::RwLock::new(None),
@@ -326,6 +347,74 @@ impl App {
         database.set_raw("DbPass", &cfg.password);
         database.save(&path).with_context(|| DatabaseSettings::FILE)?;
         Ok(())
+    }
+
+    /// Rebuild the now-playing exporter from the live plugin settings +
+    /// current station name (call after either changes).
+    pub fn rebuild_exporter(&self) {
+        let plugin = self.plugin_export.read().expect("plugin export lock");
+        let station = self.general.read().expect("general lock").station_name().clone();
+        let exporter = NowPlayingExporter::new(ExportConfig::from_settings(&plugin), station);
+        *self.exporter.write().expect("exporter lock") = Arc::new(exporter);
+    }
+
+    /// Validate and persist a now-playing export draft
+    /// (`Plugins/Plugin_NowPlaying.xml`), then rebuild the exporter.
+    pub fn save_export_draft(&self, draft: radiocraft_net::nowplaying::ExportDraft) -> Result<()> {
+        if draft.export_to_file && draft.target_path.trim().is_empty() {
+            anyhow::bail!("file export needs a target path");
+        }
+        if draft.export_to_web
+            && draft.web_urls.iter().all(|u| u.trim().is_empty())
+        {
+            anyhow::bail!("web export needs at least one URL");
+        }
+        if draft.export_to_serial && draft.target_port.trim().is_empty() {
+            anyhow::bail!("serial export needs a port");
+        }
+        {
+            let mut plugin = self.plugin_export.write().expect("plugin export lock");
+            for (key, value) in draft.to_keys() {
+                plugin.set(key, value);
+            }
+            plugin
+                .save_at(self.config_dir.join(METADATA_EXPORT_FILE))
+                .with_context(|| METADATA_EXPORT_FILE)?;
+        }
+        self.rebuild_exporter();
+        Ok(())
+    }
+
+    /// Switch the live output device (`None`/empty = system default).
+    /// Opens the new sink first so failures leave playout untouched, then
+    /// persists the choice to `settings_soundcards.xml`.
+    pub fn set_audio_device(&self, name: Option<&str>) -> Result<radiocraft_audio::device::SinkInfo> {
+        let name = name.map(str::trim).filter(|n| !n.is_empty());
+        let sink = match name {
+            Some(n) => radiocraft_audio::device::DeviceManager::open_named_sink(n)
+                .with_context(|| format!("opening output device '{n}'"))?,
+            None => match radiocraft_audio::device::DeviceManager::open_default_sink() {
+                Ok(sink) => sink,
+                Err(_) => Box::new(radiocraft_audio::device::NullSink::default()),
+            },
+        };
+        let info = sink.info();
+        self.engine.set_sink(sink);
+
+        let path = self.config_dir.join(SoundcardSettings::FILE);
+        let mut soundcards = if path.exists() {
+            SoundcardSettings::load(&path).with_context(|| SoundcardSettings::FILE)?
+        } else {
+            SoundcardSettings::default()
+        };
+        soundcards.set_raw(
+            "audio_device",
+            name.unwrap_or(info.name.as_str()),
+        );
+        soundcards
+            .save(&path)
+            .with_context(|| SoundcardSettings::FILE)?;
+        Ok(info)
     }
 
     /// Push a status line (also echoed on the WS event stream).
@@ -376,8 +465,8 @@ impl App {
     /// blocking the async runtime (`broadcast` fans out file/web/serial).
     pub async fn on_track_started(&self, playing: NowPlaying) {
         let song = playing.song_data();
-        if self.exporter.config.should_export(&song) {
-            let exporter = Arc::clone(&self.exporter);
+        let exporter = self.exporter.read().expect("exporter lock").clone();
+        if exporter.config.should_export(&song) {
             tokio::task::spawn_blocking(move || {
                 if let Err(e) = exporter.broadcast(&song) {
                     tracing::warn!("now-playing export failed: {e}");

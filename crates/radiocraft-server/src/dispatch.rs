@@ -574,6 +574,17 @@ async fn run(app: &Arc<App>, op: &str, args: &Value) -> Result<Value> {
         "criteria_delete" => crate::rotations::op_criteria_delete(app, args).await,
         "list_lookup" => crate::rotations::op_lookup(app).await,
 
+        // ---- settings editors (XML-backed options) ----------------------------
+        "list_devices" => crate::settings::op_list_devices(app),
+        "set_device" => crate::settings::op_set_device(app, args),
+        "soundcards_get" => crate::settings::op_soundcards_get(app),
+        "soundcards_set" => crate::settings::op_soundcards_set(app, args),
+        "sound_options_get" => crate::settings::op_sound_options_get(app),
+        "sound_options_set" => crate::settings::op_sound_options_set(app, args),
+        "export_get" => crate::settings::op_export_get(app),
+        "export_set" => crate::settings::op_export_set(app, args),
+        "export_test" => crate::settings::op_export_test(app).await,
+
         other => Err(anyhow!("unknown op {other}")),
     }
 }
@@ -929,6 +940,11 @@ impl App {
                 .context("saving settings_general.xml")?;
         }
         self.reapply_engine_knobs();
+        if key == "StationName" {
+            // The now-playing templates render $station_name$; rebuild so
+            // the new name takes effect without a restart.
+            self.rebuild_exporter();
+        }
         let _ = self.tx.send(self.state_frame());
         Ok(())
     }
@@ -936,6 +952,12 @@ impl App {
     /// Push the settings knobs the engine reads live back into it.
     pub fn reapply_engine_knobs(&self) {
         let general = self.general.read().expect("general lock");
+        self.engine
+            .set_master_db(crate::state::volume_out_to_db(*general.volume_out()));
+        self.engine
+            .set_default_fade_out_ms(*general.dur_fadeout());
+        self.engine
+            .set_overlay_db(f64::from(*general.vol_overlay()));
         self.engine
             .set_duck_db(f64::from(*general.vol_onsweeper()));
         self.engine.set_vt_duck_db(f64::from(*general.vol_vt()));

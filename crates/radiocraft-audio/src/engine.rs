@@ -80,7 +80,7 @@ pub struct PlayoutEngine {
     sink: Mutex<Box<dyn AudioSink>>,
     pump: Mutex<Option<JoinHandle<()>>>,
     running: Arc<AtomicBool>,
-    cfg: EngineConfig,
+    cfg: Mutex<EngineConfig>,
 }
 
 struct Inner {
@@ -122,12 +122,23 @@ impl PlayoutEngine {
             sink: Mutex::new(sink),
             pump: Mutex::new(None),
             running: Arc::new(AtomicBool::new(false)),
-            cfg,
+            cfg: Mutex::new(cfg),
         }
     }
 
-    pub fn config(&self) -> &EngineConfig {
-        &self.cfg
+    pub fn config(&self) -> EngineConfig {
+        self.cfg.lock().clone()
+    }
+
+    /// Live-update the default fade-out used when a stop request carries
+    /// the `-1` sentinel (sound-options editor).
+    pub fn set_default_fade_out_ms(&self, ms: i32) {
+        self.cfg.lock().default_fade_out_ms = ms;
+    }
+
+    /// Live-update the cart-zone overlay gain (sound-options editor).
+    pub fn set_overlay_db(&self, db: f64) {
+        self.cfg.lock().overlay_db = db;
     }
 
     // ---- playback control -------------------------------------------------
@@ -173,7 +184,7 @@ impl PlayoutEngine {
 
     /// Stop `zone` with a fade (`-1` = engine default, `-999` = cut).
     pub fn stop(&self, zone: Zone, fade_out_ms: i32) {
-        let fade = normalize_stop_fade(fade_out_ms, self.cfg.default_fade_out_ms);
+        let fade = normalize_stop_fade(fade_out_ms, self.cfg.lock().default_fade_out_ms);
         let mut inner = self.inner.lock();
         if let Some(slot) = inner.slots.get_mut(&zone) {
             slot.player.stop(fade);
@@ -182,7 +193,7 @@ impl PlayoutEngine {
 
     /// Stop every zone.
     pub fn stop_all(&self, fade_out_ms: i32) {
-        let fade = normalize_stop_fade(fade_out_ms, self.cfg.default_fade_out_ms);
+        let fade = normalize_stop_fade(fade_out_ms, self.cfg.lock().default_fade_out_ms);
         let mut inner = self.inner.lock();
         for slot in inner.slots.values_mut() {
             slot.player.stop(fade);
@@ -191,7 +202,7 @@ impl PlayoutEngine {
 
     /// Stop `zone` at an absolute position (`cue_end`) with a fade-out.
     pub fn stop_at(&self, zone: Zone, secs: f64, fade_out_ms: i32) -> Result<()> {
-        let fade = normalize_stop_fade(fade_out_ms, self.cfg.default_fade_out_ms);
+        let fade = normalize_stop_fade(fade_out_ms, self.cfg.lock().default_fade_out_ms);
         let mut inner = self.inner.lock();
         if let Some(slot) = inner.slots.get_mut(&zone) {
             slot.player.stop_at_secs(secs, fade)?;
@@ -322,11 +333,13 @@ impl PlayoutEngine {
     /// Render one block of `block_frames` frames: players -> zone gains ->
     /// sum -> master gain -> sound processor -> meters.
     pub fn render_block(&self) -> Vec<f32> {
+        let (frames, overlay_lin) = {
+            let cfg = self.cfg.lock();
+            (cfg.block_frames, db_to_lin(cfg.overlay_db) as f32)
+        };
         let mut inner = self.inner.lock();
-        let frames = self.cfg.block_frames;
         let mut master = vec![0.0f32; frames * 2];
 
-        let overlay_lin = db_to_lin(self.cfg.overlay_db) as f32;
         for zone in ALL_ZONES {
             let gain = inner.mixer.zone_gain(zone);
             let slot = match inner.slots.get_mut(&zone) {
@@ -404,7 +417,7 @@ impl PlayoutEngine {
         }
         let running = Arc::clone(&self.running);
         let engine = EnginePtr(self);
-        let block_secs = self.cfg.block_frames as f64 / crate::SAMPLE_RATE as f64;
+        let block_secs = self.cfg.lock().block_frames as f64 / crate::SAMPLE_RATE as f64;
         let handle = std::thread::spawn(move || {
             while running.load(Ordering::SeqCst) {
                 // Safe: Drop stops the flag and joins this thread first.
@@ -422,6 +435,14 @@ impl PlayoutEngine {
             let _ = h.join();
         }
         self.sink.lock().flush();
+    }
+
+    /// Swap the output sink live (sound-device change). The old sink is
+    /// flushed before the replacement takes over.
+    pub fn set_sink(&self, sink: Box<dyn AudioSink>) {
+        let mut old = self.sink.lock();
+        old.flush();
+        *old = sink;
     }
 
     pub fn set_sink_paused(&self, paused: bool) {

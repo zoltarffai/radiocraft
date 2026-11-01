@@ -167,6 +167,11 @@ impl KvStore {
     /// Write a settings file to disk.
     pub fn save(&self, path: impl AsRef<Path>) -> Result<(), crate::error::Error> {
         let path = path.as_ref();
+        if let Some(dir) = path.parent() {
+            if !dir.as_os_str().is_empty() {
+                let _ = std::fs::create_dir_all(dir);
+            }
+        }
         std::fs::write(path, self.to_bytes()).map_err(|e| Error::io(path, e))
     }
 
