@@ -135,7 +135,14 @@ or local `YYYY-MM-DD HH:MM:SS`. `queuelist` has no cue/fade columns — queue ed
 ETA/order/swap only.
 
 REST mirrors: `/api/state`, `/api/songs`, `/api/playlists`, `/api/playlists/{id}/items`,
-`/api/carts`, `/api/carts/{id}/buttons`, `/api/history`.
+`/api/carts`, `/api/carts/{id}/buttons`, `/api/history` — plus the universal command
+mirror `POST /api/cmd/{op}` with the op's args as the JSON body (empty body = no args).
+It runs the same `dispatch()` as the WS surface: a `result` frame's flat payload is the
+200 response body; failures answer 400 `{code:"cmd_failed", message}` and unparsable
+bodies 400 `{code:"bad_json"}`. Every WS op is therefore reachable over REST.
+When `RADIOCRAFT_AUTH_TOKEN` is set the whole `/api/*` surface (GET reads and cmd posts)
+requires `Authorization: Bearer <token>` or `X-Auth-Token`, answering 401 otherwise;
+`/health` stays open. Tests: `crates/radiocraft-server/tests/http_e2e.rs`.
 
 Cue times: `CueKnobs` in `radiocraft-server/src/playback.rs` (camelCase, 0 = not set).
 RadioDJ `cue_times` DB string: `&sta= &int= &pin=/&pou= &hin=/&hou= &out= &xta= &end=
@@ -220,13 +227,21 @@ exporter rebuild). The chosen device persists as the `audio_device` extra key in
 export editor with per-row URL/method list and Test-export snapshot readout). Scheduler
 options are the AutoDJ panel's knobs (`SchedulerConfig` via `autodj_set`), already shipped.
 
+REST parity is closed too: `POST /api/cmd/{op}` in `radiocraft-server/src/http.rs` mirrors
+every WS op through the same dispatcher (flat payload in, flat payload out), with the auth
+token gate extended over the whole `/api/*` surface (`Authorization: Bearer` or
+`X-Auth-Token`; `/health` stays open). Live curl smoke verified against
+`RADIOCRAFT_AUTH_TOKEN=letmein ./target/debug/radiocraft-server`: 401 without/with a bad
+token, flat results with it, `cmd_failed`/`bad_json` error mapping.
+
 Still open:
 
-1. REST mirrors for the new parity ops (currently WS-only; REST keeps the read-only set).
-2. Packaging for the shell: `cargo tauri build` deb/rpm job (bundle config already in
+1. Packaging for the shell: `cargo tauri build` deb/rpm job (bundle config already in
    `tauri.conf.json`: targets deb/rpm, identifier `dev.radiocraft.window`).
-3. Cosmetic: on shell exit two benign GTK teardown warnings (appindicator known quirk) +
+2. Cosmetic: on shell exit two benign GTK teardown warnings (appindicator known quirk) +
    libayatana deprecation warning — harmless.
+3. Optional: wire the `radiocraft-plugin` `PluginRegistry`/`load_plugin` into the server so
+   external dylib plugins actually load (today only the built-in NowPlaying exporter runs).
 
 Deferred fidelity checks (optional): cross-check `LoudnessCalculator.cs`, Plugin_SoundProcessing
 FX keys against decompiles.

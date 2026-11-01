@@ -6,12 +6,17 @@
 use std::sync::Arc;
 
 use axum::Router;
-use axum::extract::{Path, Query, State};
-use axum::response::Html;
-use axum::routing::get;
+use axum::body::Bytes;
+use axum::extract::{Path, Query, Request, State};
+use axum::http::HeaderMap;
+use axum::http::StatusCode;
+use axum::middleware::{self, Next};
+use axum::response::{Html, IntoResponse, Response};
+use axum::routing::{get, post};
 use serde::Deserialize;
 use tower_http::services::{ServeDir, ServeFile};
 
+use crate::dispatch::dispatch;
 use crate::frames::Frame;
 use crate::state::App;
 use crate::ws::{ServerSocket, handle_upgrade};
@@ -23,9 +28,7 @@ pub fn router(app: Arc<App>, auth: Arc<crate::auth::Auth>, web_dist: Option<std:
         app: Arc::clone(&app),
         auth: auth.clone(),
     };
-    let mut router = Router::new()
-        .route("/ws", get(handle_upgrade))
-        .route("/health", get(health))
+    let api = Router::new()
         .route("/api/state", get(state_snapshot))
         .route("/api/history", get(list_history))
         .route("/api/songs", get(list_songs))
@@ -33,6 +36,13 @@ pub fn router(app: Arc<App>, auth: Arc<crate::auth::Auth>, web_dist: Option<std:
         .route("/api/playlists/{id}/items", get(list_playlist_items))
         .route("/api/carts", get(list_carts))
         .route("/api/carts/{id}/buttons", get(list_cart_buttons))
+        .route("/api/cmd/{op}", post(run_cmd))
+        .layer(middleware::from_fn_with_state(socket.clone(), require_api_token))
+        .with_state(socket.clone());
+    let mut router = Router::new()
+        .route("/ws", get(handle_upgrade))
+        .route("/health", get(health))
+        .merge(api)
         .with_state(socket.clone());
 
     if let Some(dist) = web_dist {
@@ -60,6 +70,81 @@ async fn health(State(socket): State<ServerSocket>) -> Html<String> {
 
 async fn state_snapshot(State(socket): State<ServerSocket>) -> axum::Json<Frame> {
     axum::Json(socket.app.state_frame())
+}
+
+/// Token gate for the `/api/*` surface, mirroring the WS `hello` check.
+/// The token rides in `Authorization: Bearer <token>` or `X-Auth-Token`.
+async fn require_api_token(State(socket): State<ServerSocket>, req: Request, next: Next) -> Response {
+    let token = bearer_token(req.headers());
+    if socket.auth.check_hello(None, token) {
+        next.run(req).await
+    } else {
+        (
+            StatusCode::UNAUTHORIZED,
+            axum::Json(serde_json::json!({
+                "code": "unauthorized",
+                "message": "missing or bad token; send Authorization: Bearer <token>",
+            })),
+        )
+            .into_response()
+    }
+}
+
+fn bearer_token(headers: &HeaderMap) -> Option<&str> {
+    let bearer = headers
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer ").or_else(|| v.strip_prefix("bearer ")));
+    bearer.or_else(|| {
+        headers
+            .get("x-auth-token")
+            .and_then(|v| v.to_str().ok())
+    })
+}
+
+/// REST mirror of every WS command: `POST /api/cmd/{op}` with the op's args
+/// as the JSON body (an empty body means no args). A `result` frame's flat
+/// payload is returned verbatim; failures answer 400 with `{code, message}`.
+/// This gives third-party integrations full parity with the WS op surface
+/// without speaking the frame protocol.
+async fn run_cmd(
+    State(socket): State<ServerSocket>,
+    Path(op): Path<String>,
+    body: Bytes,
+) -> Response {
+    let args = if body.is_empty() {
+        serde_json::Value::Null
+    } else {
+        match serde_json::from_slice(&body) {
+            Ok(args) => args,
+            Err(e) => {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    axum::Json(serde_json::json!({
+                        "code": "bad_json",
+                        "message": format!("unparsable args: {e}"),
+                    })),
+                )
+                    .into_response();
+            }
+        }
+    };
+    match dispatch(&socket.app, 0, &op, &args).await {
+        Frame::Result { data, .. } => axum::Json(data).into_response(),
+        Frame::Error { code, message, .. } => (
+            StatusCode::BAD_REQUEST,
+            axum::Json(serde_json::json!({ "code": code, "message": message })),
+        )
+            .into_response(),
+        other => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            axum::Json(serde_json::json!({
+                "code": "protocol",
+                "message": format!("dispatcher returned unexpected frame: {other:?}"),
+            })),
+        )
+            .into_response(),
+    }
 }
 
 #[derive(Debug, Deserialize)]

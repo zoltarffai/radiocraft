@@ -658,7 +658,7 @@ async fn live_rotation_editor_ops() {
     assert_eq!(legacy.subID, subcat_id as i32);
     assert_eq!(legacy.artist_separation, 30);
     assert_eq!(legacy.ord, 1);
-    assert_eq!(legacy.selType, false);
+    assert!(!legacy.selType);
     assert!(legacy.data.starts_with('{'));
 
     // Update: partial patch merges (serde(default)).
