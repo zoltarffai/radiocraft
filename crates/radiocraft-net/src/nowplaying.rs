@@ -279,6 +279,7 @@ pub fn encoding_code(e: FileEncoding) -> i32 {
 /// items into the `WebItems` XML blob RadioDJ stores. The web settings
 /// editor exchanges the same shape over the wire.
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default)]
 pub struct ExportDraft {
     pub export_to_file: bool,
     pub target_path: String,
