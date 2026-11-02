@@ -6,6 +6,7 @@
 
 pub mod auth;
 pub mod autodj;
+pub mod cartwall;
 pub mod dispatch;
 pub mod frames;
 pub mod grid;

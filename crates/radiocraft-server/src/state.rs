@@ -204,6 +204,8 @@ pub struct App {
     pub(crate) plugin_export: std::sync::RwLock<PluginSettings>,
     /// Master sound-processing config (`Plugins/Plugin_SoundProcessing.xml`).
     pub(crate) soundfx: std::sync::RwLock<radiocraft_audio::ProcessorConfig>,
+    /// Built-in cart wall config (`settings_cartwall.xml`).
+    pub cartwall: std::sync::RwLock<crate::cartwall::CartwallConfig>,
     /// `None` until the operator connects (`dbConnect`).
     pub db: RwLock<Option<Db>>,
     pub db_cfg: RwLock<DbConfig>,
@@ -320,6 +322,7 @@ impl App {
             exporter: std::sync::RwLock::new(Arc::new(exporter)),
             plugin_export: std::sync::RwLock::new(plugin_export),
             soundfx: std::sync::RwLock::new(radiocraft_audio::ProcessorConfig::default()),
+            cartwall: std::sync::RwLock::new(crate::cartwall::CartwallConfig::default()),
             db: RwLock::new(None),
             db_cfg: RwLock::new(db_config_from(&database)),
             now: std::sync::RwLock::new(None),
@@ -332,6 +335,10 @@ impl App {
         // Install a saved master FX chain before the first playback.
         crate::soundfx::apply_at_boot(&app)
             .context("loading master sound-processing settings")?;
+        // Seed the built-in cart wall config (`settings_cartwall.xml`).
+        if let Ok(cfg) = crate::cartwall::load_config(&app) {
+            *app.cartwall.write().expect("cartwall lock") = cfg;
+        }
         Ok(app)
     }
 

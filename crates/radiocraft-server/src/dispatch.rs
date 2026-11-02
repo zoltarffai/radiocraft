@@ -472,6 +472,14 @@ async fn run(app: &Arc<App>, op: &str, args: &Value) -> Result<Value> {
             Ok(json!({ "buttons": buttons }))
         }
 
+        // ---- cart wall ------------------------------------------------------------
+        "cartwall_get_config" => crate::cartwall::op_get(app),
+        "cartwall_set_config" => crate::cartwall::op_set(app, args),
+        "cartwall_create" => crate::cartwall::op_create(app, args).await,
+        "cartwall_rename" => crate::cartwall::op_rename(app, args).await,
+        "cartwall_delete" => crate::cartwall::op_delete(app, args).await,
+        "cartwall_save_buttons" => crate::cartwall::op_save_buttons(app, args).await,
+
         // ---- play queue ----------------------------------------------------------
         "list_queue" => {
             let db = app.require_db().await?;
@@ -1073,6 +1081,10 @@ mod tests {
             ("list_playlist_items", json!({"playlistId": 1})),
             ("list_carts", json!({})),
             ("list_cart_buttons", json!({"cartId": 1})),
+            ("cartwall_create", json!({"name": "x"})),
+            ("cartwall_rename", json!({"cartId": 1, "name": "y"})),
+            ("cartwall_delete", json!({"cartId": 1})),
+            ("cartwall_save_buttons", json!({"cartId": 1, "buttons": []})),
         ] {
             let frame = dispatch(&app, 9, op, &args).await;
             match frame {
@@ -1080,6 +1092,68 @@ mod tests {
                     assert!(message.contains("database"), "{op}: {message}");
                 }
                 other => panic!("{op}: expected error, got {other:?}"),
+            }
+        }
+    }
+
+    /// Cartwall config round-trips through the plugin's settings file with
+    /// RadioDJ's key names and defaults (Columns 4 / Rows 6).
+    #[tokio::test]
+    async fn cartwall_config_round_trips() {
+        let app = tmp_app();
+        let frame = dispatch(&app, 1, "cartwall_get_config", &json!({})).await;
+        let cfg = match frame {
+            Frame::Result { data, .. } => data,
+            other => panic!("expected ok, got {other:?}"),
+        };
+        assert_eq!(cfg["columns"], 4);
+        assert_eq!(cfg["rows"], 6);
+        assert_eq!(cfg["fade"], 1);
+
+        let frame = dispatch(
+            &app,
+            2,
+            "cartwall_set_config",
+            &json!({"columns": 8, "rows": 3, "fade": 2, "autoRoll": true}),
+        )
+        .await;
+        assert!(matches!(frame, Frame::Result { .. }));
+        assert!(app
+            .config_dir
+            .join(crate::cartwall::CARTWALL_SETTINGS_FILE)
+            .exists());
+
+        let frame = dispatch(&app, 3, "cartwall_get_config", &json!({})).await;
+        match frame {
+            Frame::Result { data, .. } => {
+                assert_eq!(data["columns"], 8);
+                assert_eq!(data["rows"], 3);
+                assert_eq!(data["fade"], 2);
+                assert_eq!(data["autoRoll"], true);
+            }
+            other => panic!("expected ok, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn cartwall_buttons_reject_bad_slots() {
+        let app = tmp_app();
+        for (buttons, needle) in [
+            (json!([{"slot": 0, "songId": 1}]), "slot must be"),
+            (json!([{"slot": 1, "songId": 0}]), "not assigned"),
+        ] {
+            let frame = dispatch(
+                &app,
+                4,
+                "cartwall_save_buttons",
+                &json!({"cartId": 1, "buttons": buttons}),
+            )
+            .await;
+            match frame {
+                Frame::Error { message, .. } => {
+                    assert!(message.contains(needle), "{message}");
+                }
+                other => panic!("expected error, got {other:?}"),
             }
         }
     }

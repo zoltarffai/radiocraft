@@ -11,6 +11,7 @@
 use chrono::{NaiveDate, NaiveDateTime};
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
+use sqlx::Acquire as _;
 use sqlx::MySqlPool;
 
 use crate::error::Result;
@@ -1657,6 +1658,23 @@ pub async fn insert_cart(pool: &MySqlPool, name: &str) -> Result<u32> {
     Ok(id as u32)
 }
 
+/// One `carts` wall row by primary key.
+pub async fn cart_by_id(pool: &MySqlPool, id: u32) -> Result<Option<Cart>> {
+    Ok(sqlx::query_as::<_, Cart>("SELECT ID, name FROM carts WHERE ID = ?")
+        .bind(id)
+        .fetch_optional(pool)
+        .await?)
+}
+
+pub async fn rename_cart(pool: &MySqlPool, id: u32, name: &str) -> Result<u64> {
+    Ok(sqlx::query("UPDATE carts SET name = ? WHERE ID = ?")
+        .bind(name)
+        .bind(id)
+        .execute(pool)
+        .await?
+        .rows_affected())
+}
+
 pub async fn delete_cart(pool: &MySqlPool, id: u32) -> Result<u64> {
     let mut conn = pool.acquire().await?;
     let cart_rows = sqlx::query("DELETE FROM carts WHERE ID = ?")
@@ -1735,6 +1753,24 @@ pub async fn list_cart_buttons_with_songs(
     .await?)
 }
 
+/// The `carts` wall row a `carts_list` button belongs to. RadioDJ's
+/// `CartWallButton_Click` handler looks this up (`SELECT ID, name FROM
+/// carts WHERE ID = <pID>`) before rolling the button on the cart zone.
+#[derive(Debug, Clone, PartialEq, Eq, sqlx::FromRow)]
+pub struct CartWall {
+    pub ID: u32,
+    pub name: String,
+}
+
+pub async fn cart_wall_of_button(pool: &MySqlPool, button_id: u32) -> Result<Option<CartWall>> {
+    Ok(sqlx::query_as::<_, CartWall>(
+        "SELECT b.pID AS ID, c.name FROM carts_list b JOIN carts c ON c.ID = b.pID WHERE b.ID = ?",
+    )
+    .bind(button_id)
+    .fetch_optional(pool)
+    .await?)
+}
+
 pub async fn insert_cart_button(
     pool: &MySqlPool,
     pID: u32,
@@ -1760,6 +1796,42 @@ pub async fn delete_cart_button(pool: &MySqlPool, id: u32) -> Result<u64> {
         .execute(pool)
         .await?
         .rows_affected())
+}
+
+/// One button slot in a cartwall layout, as saved by the config window.
+#[derive(Debug, Clone)]
+pub struct NewCartButton {
+    pub swID: u32,
+    pub swButton: u32,
+    pub color: String,
+}
+
+/// Replace a wall's whole button layout, mirroring the plugin's save:
+/// one `DELETE FROM carts_list WHERE pID=...` then one insert per
+/// assigned slot, all on one connection. Returns the number of buttons
+/// inserted.
+pub async fn replace_cart_buttons(
+    pool: &MySqlPool,
+    cart_id: u32,
+    buttons: &[NewCartButton],
+) -> Result<u64> {
+    let mut conn = pool.acquire().await?;
+    let mut tx = conn.begin().await?;
+    sqlx::query("DELETE FROM carts_list WHERE pID = ?")
+        .bind(cart_id)
+        .execute(&mut *tx)
+        .await?;
+    for b in buttons {
+        sqlx::query("INSERT INTO carts_list (pID, swID, swButton, color) VALUES (?, ?, ?, ?)")
+            .bind(cart_id)
+            .bind(b.swID)
+            .bind(b.swButton)
+            .bind(&b.color)
+            .execute(&mut *tx)
+            .await?;
+    }
+    tx.commit().await?;
+    Ok(buttons.len() as u64)
 }
 
 // ---------------------------------------------------------------------------
