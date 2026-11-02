@@ -581,6 +581,8 @@ async fn run(app: &Arc<App>, op: &str, args: &Value) -> Result<Value> {
         "soundcards_set" => crate::settings::op_soundcards_set(app, args),
         "sound_options_get" => crate::settings::op_sound_options_get(app),
         "sound_options_set" => crate::settings::op_sound_options_set(app, args),
+        "fx_get" => crate::soundfx::op_fx_get(app),
+        "fx_set" => crate::soundfx::op_fx_set(app, args),
         "export_get" => crate::settings::op_export_get(app),
         "export_set" => crate::settings::op_export_set(app, args),
         "export_test" => crate::settings::op_export_test(app).await,

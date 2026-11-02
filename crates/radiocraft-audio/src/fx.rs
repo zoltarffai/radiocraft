@@ -216,9 +216,11 @@ pub struct ParametricEq {
     bands: Vec<(PeakEqBand, Biquad, Biquad)>,
 }
 
-/// RadioDJ default EQ frequencies (Hz) for the 10 bands in `eqValues`.
+/// RadioDJ default EQ frequencies (Hz) for the 10 bands in `eqValues` —
+/// exactly the `BASS_BFX_PEAKEQ` centers programmed by
+/// `Plugin_SoundProcessing.SetEqualizer` (bandwidth 1 octave, fQ auto).
 pub const EQ_FREQS: [f64; 10] = [
-    40.0, 80.0, 150.0, 300.0, 500.0, 1000.0, 2000.0, 4000.0, 8000.0, 14000.0,
+    32.0, 63.0, 125.0, 250.0, 500.0, 1000.0, 2000.0, 4000.0, 8000.0, 16000.0,
 ];
 
 impl ParametricEq {
@@ -505,42 +507,145 @@ impl Limiter {
 // Sound processor (Plugin_SoundProcessing)
 // ---------------------------------------------------------------------------
 
-/// Full sound-processing chain configured from the RadioDJ
-/// `Plugin_SoundProcessing` settings keys.
+/// AGC strength, mirroring the `fxDampPreset` combo in RadioDJ's
+/// sound-processing window (0 = Hard, 1 = Medium, 2 = Soft; disabling the
+/// AGC entirely is the separate `AGCEnabled` flag).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum DampPreset {
+    Hard,
+    Medium,
+    Soft,
+}
+
+impl DampPreset {
+    /// Map the stored `fxDampPreset` integer (anything unknown = Hard).
+    pub fn from_id(id: i64) -> Self {
+        match id {
+            1 => DampPreset::Medium,
+            2 => DampPreset::Soft,
+            _ => DampPreset::Hard,
+        }
+    }
+
+    /// Tuning modeled on the BASS `BASS_BFX_DAMP` preset helpers that
+    /// `Plugin_SoundProcessing.FX_UpdateAGC` applies: (threshold dB,
+    /// ratio, attack ms, release ms).
+    fn params(self) -> (f64, f64, f64, f64) {
+        match self {
+            DampPreset::Hard => (-30.0, 8.0, 10.0, 200.0),
+            DampPreset::Medium => (-24.0, 4.0, 30.0, 400.0),
+            DampPreset::Soft => (-18.0, 2.0, 60.0, 800.0),
+        }
+    }
+}
+
+/// All RadioDJ `Plugin_SoundProcessing` settings (`GetSetting` keys with
+/// the plugin's own defaults). `SoundProcessor::new` compiles this into
+/// the live chain; the server round-trips it through
+/// `Plugins/Plugin_SoundProcessing.xml`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ProcessorConfig {
+    /// `CompressorEnabled`
+    pub compressor_enabled: bool,
+    /// `eqON`
+    pub eq_enabled: bool,
+    /// `AGCEnabled`
+    pub agc_enabled: bool,
+    /// `StereoEnhancerEnabled`
+    pub stereo_enabled: bool,
+    /// `fxCompByPreset` — use `fxCompPreset` instead of the `c*` values.
+    pub compressor_by_preset: bool,
+    /// `fxCompPreset` — 0 Default, 1 Hard, 2 Hard2, 3 HardCommercial,
+    /// 4 Medium, 5 Soft, 6 Soft2 (Bass.Net preset order).
+    pub compressor_preset: i64,
+    /// `fxDampPreset` — 0 Hard, 1 Medium, 2 Soft.
+    pub damp_preset: i64,
+    /// `cThreshold` — compressor threshold dBFS (UI range -60..=0).
+    pub threshold_db: f64,
+    /// `cRatio`
+    pub ratio: f64,
+    /// `cAttack` — ms
+    pub attack_ms: f64,
+    /// `cRelease` — ms (UI range 50..=3000)
+    pub release_ms: f64,
+    /// `cGain` — makeup gain dB (UI range -60..=60)
+    pub gain_db: f64,
+    /// `vol_Out` — output trim as a **linear percent 0..=100**
+    /// (RadioDJ feeds BASS `fVolume = vol_Out / 100`, not dB).
+    pub vol_out: f64,
+    /// `fxStereo` — stereo-enhancer amount, 1..=10.
+    pub stereo_amount: i64,
+    /// `eqValues` — 10 peaking-band gains in dB at [`EQ_FREQS`].
+    pub eq_values: [f64; 10],
+}
+
+impl Default for ProcessorConfig {
+    fn default() -> Self {
+        Self {
+            compressor_enabled: false,
+            eq_enabled: false,
+            agc_enabled: false,
+            stereo_enabled: false,
+            compressor_by_preset: false,
+            compressor_preset: 0,
+            damp_preset: 0,
+            // RadioDJ's raw cThreshold default ("30") sits above the
+            // control's -60..=0 range; the designer default is -15.
+            threshold_db: -15.0,
+            ratio: 3.0,
+            attack_ms: 5.0,
+            release_ms: 200.0,
+            gain_db: 10.0,
+            vol_out: 50.0,
+            stereo_amount: 1,
+            eq_values: [0.0; 10],
+        }
+    }
+}
+
+/// Compressor tuning for `fxCompPreset` (the Bass.Net `Preset_*` helpers
+/// RadioDJ calls when `fxCompByPreset` is true), modeled as
+/// (threshold dB, ratio, attack ms, release ms, makeup dB).
+fn preset_compressor(preset: i64) -> (f64, f64, f64, f64, f64) {
+    match preset {
+        1 => (-30.0, 8.0, 4.0, 150.0, 8.0), // Hard
+        2 => (-34.0, 10.0, 2.0, 120.0, 10.0), // Hard2
+        3 => (-28.0, 6.0, 6.0, 250.0, 6.0), // HardCommercial
+        4 => (-24.0, 4.0, 10.0, 300.0, 4.0), // Medium
+        5 => (-18.0, 2.5, 20.0, 400.0, 2.0), // Soft
+        6 => (-14.0, 1.8, 30.0, 500.0, 1.0), // Soft2
+        _ => (-20.0, 3.0, 8.0, 250.0, 3.0),  // Default
+    }
+}
+
+/// Full sound-processing chain mirroring `Plugin_SoundProcessing`.
 #[derive(Debug)]
 pub struct SoundProcessor {
-    pub enabled: bool,
+    pub config: ProcessorConfig,
     compressor: Option<Compressor>,
     eq: Option<ParametricEq>,
-    limiter: Limiter,
+    agc: Option<Compressor>,
+    stereo: Option<MidSideWidth>,
     vol_out: f64,
 }
 
 impl SoundProcessor {
-    /// Build from `Plugin_SoundProcessing` keys:
-    /// - `on`: `ON` (chain master switch)
-    /// - `threshold_db`: `cThreshold` (compressor threshold dBFS)
-    /// - `ratio`: `cRatio`
-    /// - `attack_ms`: `cAttack`
-    /// - `release_ms`: `cRelease`
-    /// - `gain_db`: `cGain` (makeup gain)
-    /// - `eq_on`: `eqON`
-    /// - `eq_values`: `eqValues` (10 x dB)
-    /// - `vol_out`: `vol_Out` (output trim dB, master)
-    #[allow(clippy::too_many_arguments)]
-    pub fn from_settings(
-        on: bool,
-        threshold_db: f64,
-        ratio: f64,
-        attack_ms: f64,
-        release_ms: f64,
-        gain_db: f64,
-        eq_on: bool,
-        eq_values: &[f64],
-        vol_out_db: f64,
-        rate: f64,
-    ) -> Self {
-        let compressor = if on {
+    /// Compile a [`ProcessorConfig`] into the live chain. BASS FX
+    /// priority in RadioDJ runs stereo DSP (10) -> compressor (70) ->
+    /// EQ (80) -> AGC (90) -> volume (100); the same order is used here.
+    pub fn new(cfg: ProcessorConfig, rate: f64) -> Self {
+        let compressor = if cfg.compressor_enabled {
+            let (threshold_db, ratio, attack_ms, release_ms, gain_db) = if cfg.compressor_by_preset {
+                preset_compressor(cfg.compressor_preset)
+            } else {
+                (
+                    cfg.threshold_db,
+                    cfg.ratio,
+                    cfg.attack_ms,
+                    cfg.release_ms,
+                    cfg.gain_db,
+                )
+            };
             Some(Compressor::new(
                 CompressorConfig {
                     threshold_db: threshold_db.clamp(-80.0, 0.0),
@@ -555,29 +660,62 @@ impl SoundProcessor {
         } else {
             None
         };
-        let eq = if on && eq_on && eq_values.iter().any(|v| v.abs() > 1e-6) {
-            Some(ParametricEq::new(eq_values, rate))
+        let eq = if cfg.eq_enabled && cfg.eq_values.iter().any(|v| v.abs() > 1e-6) {
+            Some(ParametricEq::new(&cfg.eq_values, rate))
+        } else {
+            None
+        };
+        let agc = if cfg.agc_enabled {
+            let (threshold_db, ratio, attack_ms, release_ms) =
+                DampPreset::from_id(cfg.damp_preset).params();
+            Some(Compressor::new(
+                CompressorConfig {
+                    threshold_db,
+                    ratio,
+                    attack_ms,
+                    release_ms,
+                    makeup_db: 0.0,
+                    knee_db: 0.0,
+                },
+                rate,
+            ))
+        } else {
+            None
+        };
+        let stereo = if cfg.stereo_enabled && cfg.stereo_amount > 1 {
+            // fxStereo 1 = unchanged; the BASS DSP's WideCoeff is
+            // modeled as a mid/side multiplier growing 1.0..3.25.
+            let amount = (cfg.stereo_amount as f64).clamp(1.0, 10.0);
+            Some(MidSideWidth::new(WidthConfig {
+                width: 1.0 + (amount - 1.0) * 0.25,
+            }))
         } else {
             None
         };
         Self {
-            enabled: on,
+            vol_out: (cfg.vol_out.clamp(0.0, 100.0) / 100.0),
+            config: cfg,
             compressor,
             eq,
-            limiter: Limiter::new(LimiterConfig::default(), rate),
-            vol_out: db_to_lin(vol_out_db),
+            agc,
+            stereo,
         }
     }
 
     #[inline]
     pub fn process(&mut self, mut left: f32, mut right: f32) -> (f32, f32) {
-        if let Some(eq) = self.eq.as_mut() {
-            (left, right) = eq.process(left, right);
+        if let Some(w) = self.stereo.as_ref() {
+            (left, right) = w.process(left, right);
         }
         if let Some(c) = self.compressor.as_mut() {
             (left, right) = c.process(left, right);
         }
-        (left, right) = self.limiter.process(left, right);
+        if let Some(eq) = self.eq.as_mut() {
+            (left, right) = eq.process(left, right);
+        }
+        if let Some(agc) = self.agc.as_mut() {
+            (left, right) = agc.process(left, right);
+        }
         (
             (left as f64 * self.vol_out) as f32,
             (right as f64 * self.vol_out) as f32,
@@ -787,20 +925,79 @@ mod tests {
 
     #[test]
     fn sound_processor_processes_stereo() {
-        let mut sp = SoundProcessor::from_settings(
-            true,
-            -18.0,
-            3.0,
-            10.0,
-            100.0,
-            0.0,
-            true,
-            &[0.0; 10],
-            0.0,
-            44100.0,
-        );
+        let cfg = ProcessorConfig {
+            compressor_enabled: true,
+            eq_enabled: true,
+            agc_enabled: true,
+            stereo_enabled: true,
+            stereo_amount: 4,
+            ..ProcessorConfig::default()
+        };
+        let mut sp = SoundProcessor::new(cfg, 44100.0);
         let (l, r) = sp.process(0.5, -0.5);
         assert!(l.is_finite() && r.is_finite());
+    }
+
+    #[test]
+    fn vol_out_is_linear_percent() {
+        // RadioDJ feeds BASS fVolume = vol_Out / 100; 100 is unity, 50 halves.
+        let mut sp = SoundProcessor::new(
+            ProcessorConfig {
+                vol_out: 100.0,
+                ..ProcessorConfig::default()
+            },
+            44100.0,
+        );
+        let (l, _) = sp.process(0.8, 0.2);
+        assert!((l - 0.8).abs() < 1e-5);
+        let mut sp = SoundProcessor::new(
+            ProcessorConfig {
+                vol_out: 50.0,
+                ..ProcessorConfig::default()
+            },
+            44100.0,
+        );
+        let (l, _) = sp.process(0.8, 0.2);
+        assert!((l - 0.4).abs() < 1e-5);
+    }
+
+    #[test]
+    fn agc_preset_tames_loud_peaks() {
+        let mut sp = SoundProcessor::new(
+            ProcessorConfig {
+                agc_enabled: true,
+                damp_preset: 0, // Hard
+                vol_out: 100.0,
+                ..ProcessorConfig::default()
+            },
+            44100.0,
+        );
+        let mut peak_soft = 0.0f32;
+        for i in 0..4410 {
+            let s = (0.05f32).max((2.0 * std::f64::consts::PI * 440.0 * i as f64
+                / 44100.0)
+                .sin() as f32
+                * 0.9);
+            let (l, _) = sp.process(s, s);
+            peak_soft = peak_soft.max(l.abs());
+        }
+        assert!(peak_soft <= 0.95, "peak {peak_soft}");
+    }
+
+    #[test]
+    fn stereo_enhancer_widens() {
+        let mut sp = SoundProcessor::new(
+            ProcessorConfig {
+                stereo_enabled: true,
+                stereo_amount: 6,
+                vol_out: 100.0,
+                ..ProcessorConfig::default()
+            },
+            44100.0,
+        );
+        let (l, r) = sp.process(0.4, -0.2);
+        // L/R separation grows with the width multiplier.
+        assert!((l - r).abs() > 0.6);
     }
 
     #[test]

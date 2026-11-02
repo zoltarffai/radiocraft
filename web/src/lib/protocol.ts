@@ -428,6 +428,35 @@ export interface SoundOptions {
   vol_vt: number;
 }
 
+/** Master sound processing (`fx_get` / `fx_set`), keys named like the
+ *  RadioDJ Plugin_SoundProcessing settings. */
+export interface FxConfig {
+  CompressorEnabled: boolean;
+  eqON: boolean;
+  AGCEnabled: boolean;
+  StereoEnhancerEnabled: boolean;
+  fxCompByPreset: boolean;
+  /** 0 Default, 1 Hard, 2 Hard2, 3 HardCommercial, 4 Medium, 5 Soft, 6 Soft2 */
+  fxCompPreset: number;
+  /** AGC strength: 0 Hard, 1 Medium, 2 Soft */
+  fxDampPreset: number;
+  /** dBFS, -60..0 */
+  cThreshold: number;
+  cRatio: number;
+  /** ms, 1..500 */
+  cAttack: number;
+  /** ms, 50..3000 */
+  cRelease: number;
+  /** makeup gain dB, -60..60 */
+  cGain: number;
+  /** output trim, linear percent 0..100 */
+  vol_Out: number;
+  /** stereo enhancer amount, 1..10 */
+  fxStereo: number;
+  /** 10 peaking-band gains in dB (32/63/125/250/500/1k/2k/4k/8k/16k) */
+  eqValues: number[];
+}
+
 /** Now-playing export form (`radiocraft-net::nowplaying::ExportDraft`). */
 export interface ExportDraftView {
   export_to_file: boolean;

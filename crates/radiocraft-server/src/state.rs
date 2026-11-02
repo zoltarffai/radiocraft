@@ -202,6 +202,8 @@ pub struct App {
     pub exporter: std::sync::RwLock<Arc<NowPlayingExporter>>,
     /// Live copy of `Plugins/Plugin_NowPlaying.xml` (now-playing export).
     pub(crate) plugin_export: std::sync::RwLock<PluginSettings>,
+    /// Master sound-processing config (`Plugins/Plugin_SoundProcessing.xml`).
+    pub(crate) soundfx: std::sync::RwLock<radiocraft_audio::ProcessorConfig>,
     /// `None` until the operator connects (`dbConnect`).
     pub db: RwLock<Option<Db>>,
     pub db_cfg: RwLock<DbConfig>,
@@ -310,13 +312,14 @@ impl App {
             enabled: std::sync::atomic::AtomicBool::new(*general.auto_dj_start()),
             ..AutodjState::default()
         };
-        Ok(Self {
+        let app = Self {
             started: Instant::now(),
             config_dir: config_dir.to_path_buf(),
             general: std::sync::RwLock::new(general),
             engine,
             exporter: std::sync::RwLock::new(Arc::new(exporter)),
             plugin_export: std::sync::RwLock::new(plugin_export),
+            soundfx: std::sync::RwLock::new(radiocraft_audio::ProcessorConfig::default()),
             db: RwLock::new(None),
             db_cfg: RwLock::new(db_config_from(&database)),
             now: std::sync::RwLock::new(None),
@@ -325,7 +328,11 @@ impl App {
             status: RwLock::new(Status::info("Not connected to the database")),
             tx,
             plugins: std::sync::OnceLock::new(),
-        })
+        };
+        // Install a saved master FX chain before the first playback.
+        crate::soundfx::apply_at_boot(&app)
+            .context("loading master sound-processing settings")?;
+        Ok(app)
     }
 
     /// Attach the plugin dispatcher (called once at server startup; later

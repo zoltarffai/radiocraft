@@ -2,11 +2,11 @@
   // Options surface that lives in XML, not the database: output device,
   // sound-card / sound-option knobs, and the now-playing export plugin.
   import { session } from "./session.svelte";
-  import type { ExportDraftView } from "./protocol";
+  import type { ExportDraftView, FxConfig } from "./protocol";
 
   let busy = $state(false);
   let loadedFor = $state(-1);
-  let tab = $state<"sound" | "export">("sound");
+  let tab = $state<"sound" | "fx" | "export">("sound");
 
   // Local editable copy of the export draft; flushed on Save.
   let draft = $state<ExportDraftView | null>(null);
@@ -24,6 +24,7 @@
         await session.loadDevices();
         await session.loadSoundcards();
         await session.loadSoundOptions();
+        await session.loadFx();
         await session.loadExportDraft();
       });
     }
@@ -85,6 +86,30 @@
     void call(() => session.setSoundOptions({ [key]: v }));
   }
 
+  // ---- master sound processing (Plugin_SoundProcessing) -----------------------
+
+  function setFx(patch: Partial<FxConfig>) {
+    void call(() => session.setFx(patch));
+  }
+
+  function numFx(key: keyof FxConfig, raw: string) {
+    const v = Number(raw);
+    if (!Number.isFinite(v)) return;
+    setFx({ [key]: v } as Partial<FxConfig>);
+  }
+
+  const checked = (e: Event) => (e.currentTarget as HTMLInputElement).checked;
+
+  const EQ_BANDS = [32, 63, 125, 250, 500, 1000, 2000, 4000, 8000, 16000];
+
+  function setEq(i: number, raw: string) {
+    const v = Number(raw);
+    if (!Number.isFinite(v) || !session.fx) return;
+    const vals = [...session.fx.eqValues];
+    vals[i] = v;
+    setFx({ eqValues: vals });
+  }
+
   // ---- now-playing export ------------------------------------------------------
 
   function flushWebRows() {
@@ -117,14 +142,17 @@
     <h2>Options</h2>
     <div class="tabs" role="tablist">
       <button class="tab" class:on={tab === "sound"} role="tab" aria-selected={tab === "sound"} onclick={() => (tab = "sound")}>Sound</button>
+      <button class="tab" class:on={tab === "fx"} role="tab" aria-selected={tab === "fx"} onclick={() => (tab = "fx")}>Processing</button>
       <button class="tab" class:on={tab === "export"} role="tab" aria-selected={tab === "export"} onclick={() => (tab = "export")}>Now playing</button>
     </div>
     <span class="spacer"></span>
-    {#if tab === "sound"}
-      <button onclick={() => void call(async () => { await session.loadDevices(); await session.loadSoundcards(); await session.loadSoundOptions(); })} disabled={!online || busy}>Reload</button>
-    {:else}
+    {#if tab === "export"}
       <button onclick={() => void call(() => session.testExport())} disabled={!online || busy}>Test export</button>
       <button class="primary" onclick={saveDraft} disabled={!online || busy || !draft}>Save</button>
+    {:else if tab === "fx"}
+      <button onclick={() => void call(() => session.loadFx())} disabled={!online || busy}>Reload</button>
+    {:else}
+      <button onclick={() => void call(async () => { await session.loadDevices(); await session.loadSoundcards(); await session.loadSoundOptions(); })} disabled={!online || busy}>Reload</button>
     {/if}
   </div>
 
@@ -199,6 +227,98 @@
         </div>
         <p class="hint mono">volume_out / dur_fadeout / vol_overlay / vol_onsweeper / vol_vt — applied live</p>
       </div>
+    {/if}
+  {:else if tab === "fx"}
+    {#if session.fx}
+      {@const fx = session.fx}
+      <div class="group">
+        <h3>Output</h3>
+        <div class="fields">
+          <label>
+            Output level (0–100)
+            <input class="mono" type="number" min="0" max="100" value={fx.vol_Out} onchange={(e) => numFx("vol_Out", e.currentTarget.value)} disabled={!online || busy} />
+          </label>
+          <label class="chk"><input type="checkbox" checked={fx.StereoEnhancerEnabled} onchange={(e) => setFx({ StereoEnhancerEnabled: checked(e) })} disabled={!online || busy} /> Stereo enhancer</label>
+          <label>
+            Width (1–10)
+            <input class="mono" type="number" min="1" max="10" value={fx.fxStereo} onchange={(e) => numFx("fxStereo", e.currentTarget.value)} disabled={!online || busy || !fx.StereoEnhancerEnabled} />
+          </label>
+        </div>
+        <p class="hint mono">vol_Out is a linear output level, applied live to every zone</p>
+      </div>
+
+      <div class="group">
+        <h3>Compressor</h3>
+        <div class="fields">
+          <label class="chk"><input type="checkbox" checked={fx.CompressorEnabled} onchange={(e) => setFx({ CompressorEnabled: checked(e) })} disabled={!online || busy} /> Enable</label>
+          <label class="chk"><input type="checkbox" checked={fx.fxCompByPreset} onchange={(e) => setFx({ fxCompByPreset: checked(e) })} disabled={!online || busy || !fx.CompressorEnabled} /> By preset</label>
+          <label>
+            Preset
+            <select value={fx.fxCompPreset} onchange={(e) => numFx("fxCompPreset", e.currentTarget.value)} disabled={!online || busy || !fx.CompressorEnabled || !fx.fxCompByPreset}>
+              <option value={0}>Default</option>
+              <option value={1}>Hard</option>
+              <option value={2}>Hard 2</option>
+              <option value={3}>Hard commercial</option>
+              <option value={4}>Medium</option>
+              <option value={5}>Soft</option>
+              <option value={6}>Soft 2</option>
+            </select>
+          </label>
+          <label>
+            Threshold (dB)
+            <input class="mono" type="number" min="-60" max="0" value={fx.cThreshold} onchange={(e) => numFx("cThreshold", e.currentTarget.value)} disabled={!online || busy || !fx.CompressorEnabled || fx.fxCompByPreset} />
+          </label>
+          <label>
+            Ratio
+            <input class="mono" type="number" min="1" max="20" step="0.5" value={fx.cRatio} onchange={(e) => numFx("cRatio", e.currentTarget.value)} disabled={!online || busy || !fx.CompressorEnabled || fx.fxCompByPreset} />
+          </label>
+          <label>
+            Attack (ms)
+            <input class="mono" type="number" min="1" max="500" value={fx.cAttack} onchange={(e) => numFx("cAttack", e.currentTarget.value)} disabled={!online || busy || !fx.CompressorEnabled || fx.fxCompByPreset} />
+          </label>
+          <label>
+            Release (ms)
+            <input class="mono" type="number" min="50" max="3000" step="50" value={fx.cRelease} onchange={(e) => numFx("cRelease", e.currentTarget.value)} disabled={!online || busy || !fx.CompressorEnabled || fx.fxCompByPreset} />
+          </label>
+          <label>
+            Makeup gain (dB)
+            <input class="mono" type="number" min="-60" max="60" value={fx.cGain} onchange={(e) => numFx("cGain", e.currentTarget.value)} disabled={!online || busy || !fx.CompressorEnabled || fx.fxCompByPreset} />
+          </label>
+        </div>
+      </div>
+
+      <div class="group">
+        <h3>Equalizer</h3>
+        <div class="fields">
+          <label class="chk"><input type="checkbox" checked={fx.eqON} onchange={(e) => setFx({ eqON: checked(e) })} disabled={!online || busy} /> Enable (10 peaking bands)</label>
+        </div>
+        <div class="eqgrid">
+          {#each EQ_BANDS as f, i (f)}
+            <label class="eqband">
+              <span>{f >= 1000 ? f / 1000 + "k" : f}</span>
+              <input class="mono" type="number" min="-12" max="12" value={fx.eqValues[i]} onchange={(e) => setEq(i, e.currentTarget.value)} disabled={!online || busy || !fx.eqON} />
+            </label>
+          {/each}
+        </div>
+      </div>
+
+      <div class="group">
+        <h3>AGC</h3>
+        <div class="fields">
+          <label class="chk"><input type="checkbox" checked={fx.AGCEnabled} onchange={(e) => setFx({ AGCEnabled: checked(e) })} disabled={!online || busy} /> Enable</label>
+          <label>
+            Preset
+            <select value={fx.fxDampPreset} onchange={(e) => numFx("fxDampPreset", e.currentTarget.value)} disabled={!online || busy || !fx.AGCEnabled}>
+              <option value={0}>Hard</option>
+              <option value={1}>Medium</option>
+              <option value={2}>Soft</option>
+            </select>
+          </label>
+        </div>
+        <p class="hint mono">Stored in Plugins/Plugin_SoundProcessing.xml — applied live</p>
+      </div>
+    {:else}
+      <p class="hint">Sound-processing settings not loaded yet.</p>
     {/if}
   {:else if draft}
     <div class="group">
@@ -397,6 +517,26 @@
 
   label.chk {
     color: var(--fg);
+  }
+
+  .eqgrid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(96px, 1fr));
+    gap: 6px 10px;
+    margin-top: 8px;
+  }
+
+  .eqband {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 6px;
+    font-size: 12px;
+    color: var(--fg-dim);
+  }
+
+  .eqband input[type="number"] {
+    width: 56px;
   }
 
   .sinkinfo {

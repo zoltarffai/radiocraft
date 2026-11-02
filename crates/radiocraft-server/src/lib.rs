@@ -17,6 +17,7 @@ pub mod playlist;
 pub mod pump;
 pub mod settings;
 pub mod run;
+pub mod soundfx;
 pub mod state;
 pub mod ws;
 

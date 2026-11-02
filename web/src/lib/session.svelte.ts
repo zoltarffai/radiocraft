@@ -15,6 +15,7 @@ import type {
   ExportDraftView,
   ExportTestResult,
   Frame,
+  FxConfig,
   HistoryRow,
   LevelInfo,
   LibraryFilterArgs,
@@ -96,6 +97,8 @@ class Session {
   sink = $state<SinkInfo | null>(null);
   soundcards = $state<SoundcardsView | null>(null);
   soundOptions = $state<SoundOptions | null>(null);
+  /** Master sound-processing config (fx_get / fx_set). */
+  fx = $state<FxConfig | null>(null);
   /** Now-playing export draft (export_get / export_set). */
   exportDraft = $state<ExportDraftView | null>(null);
   /** Last export_test payload. */
@@ -439,6 +442,16 @@ class Session {
   /** Patch any subset of the `settings_general.xml` knobs. */
   async setSoundOptions(patch: Partial<SoundOptions>): Promise<void> {
     this.soundOptions = (await this.cmd<SoundOptions>("sound_options_set", patch)) as SoundOptions;
+  }
+  async loadFx(): Promise<void> {
+    const r = await this.cmd<{ config: FxConfig }>("fx_get");
+    this.fx = r.config;
+  }
+  /** Patch any subset of the master sound-processing config; the server
+   *  persists and live-applies the chain. */
+  async setFx(patch: Partial<FxConfig>): Promise<void> {
+    const r = await this.cmd<{ config: FxConfig }>("fx_set", patch);
+    this.fx = r.config;
   }
   async loadExportDraft(): Promise<void> {
     const r = await this.cmd<{ export: ExportDraftView }>("export_get");

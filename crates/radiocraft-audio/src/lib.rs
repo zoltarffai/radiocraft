@@ -61,8 +61,8 @@ pub use device::{
 pub use engine::{EngineConfig, PlayoutEngine};
 pub use error::{AudioError, Result};
 pub use fx::{
-    Compressor, Limiter, ParametricEq, SoundProcessor, VoiceAssistConfig,
-    VoiceTrackAssist,
+    Compressor, DampPreset, Limiter, ParametricEq, ProcessorConfig, SoundProcessor,
+    VoiceAssistConfig, VoiceTrackAssist,
 };
 pub use levels::{LevelTracker, PeakMeter, VuMeter};
 pub use loudness::{
