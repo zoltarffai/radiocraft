@@ -371,7 +371,7 @@ fn build_pipeline(
 ///
 /// Semantics that make it playout-safe:
 /// * Unseekable and endless: `seek` reports "cannot seek", `duration` is
-///   normally `None`, so no VDF/stop-at plan is ever derived from it.
+///   always `None`, so no VDF/stop-at plan is ever derived from it.
 /// * Automatic reconnect: a dropped or stalled connection re-opens the URL
 ///   and keeps the playout position (`error_policy: Reconnect`, the default,
 ///   as long as `open()` keeps succeeding). Only a source that can never be
@@ -390,6 +390,7 @@ pub struct StreamSource {
     dead: bool,
     failed: bool,
     reconnects: u32,
+    ever_decoded: bool,
     title: LiveTitle,
     last_meta: Option<String>,
 }
@@ -411,6 +412,7 @@ impl StreamSource {
             dead: false,
             failed: false,
             reconnects: 0,
+            ever_decoded: false,
             title,
             last_meta: None,
         })
@@ -476,7 +478,12 @@ impl StreamSource {
             .or_else(|| first_hint(url));
         let reader: Box<dyn std::io::Read + Send + Sync> = resp.into_reader();
         let mss = MediaSourceStream::new(Box::new(ReadOnlySource::new(reader)), Default::default());
-        build_pipeline(mss, ext.as_deref(), url)
+        let mut pipeline = build_pipeline(mss, ext.as_deref(), url)?;
+        // A live stream is endless: even if the server's first body chunk
+        // lets symphonia estimate a length, never let it seed a VDF/stop-at
+        // plan that would end playout early.
+        pipeline.duration = None;
+        Ok(pipeline)
     }
 
     /// Decode packets, re-opening the URL when the connection drops. A live
@@ -496,8 +503,8 @@ impl StreamSource {
     }
 
     fn open_fails(&mut self) -> bool {
-        // Never retry a source that never connected at all.
-        if self.reconnects == 0 && self.pending.is_empty() {
+        // Never retry a source that never delivered a single sample.
+        if !self.ever_decoded && self.reconnects == 0 && self.pending.is_empty() {
             self.failed = true;
             return true;
         }
@@ -555,6 +562,7 @@ impl StreamSource {
                         self.pending.extend(stereo.iter());
                     }
                     if !self.pending.is_empty() {
+                        self.ever_decoded = true;
                         return ReadOutcome::Have;
                     }
                     // otherwise keep decoding more packets
@@ -624,11 +632,12 @@ impl Source for StreamSource {
                 return 0;
             }
         }
-        let n = buf.len().min(self.pending.len());
-        for slot in buf[..n].iter_mut() {
-            *slot = self.pending.pop_front().expect("pending had a value");
+        let frames = (buf.len() / 2).min(self.pending.len() / 2);
+        for chunk in buf[..frames * 2].chunks_mut(2) {
+            chunk[0] = self.pending.pop_front().expect("pending had a value");
+            chunk[1] = self.pending.pop_front().expect("pending had a value");
         }
-        n / 2 * 2
+        frames
     }
 
     /// Live streams cannot seek.
@@ -637,6 +646,7 @@ impl Source for StreamSource {
     }
 
     fn duration(&self) -> Option<Duration> {
+        // Streams are endless; open_pipeline forces this field to None.
         self.inner.duration
     }
 

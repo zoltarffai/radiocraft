@@ -34,14 +34,14 @@ Recreate **RadioDJ v3.0.0.5** (Windows/.NET 4.8 radio playout app) as
   with the same UI code: a native Tauri window and a plain browser mode. v0.2 is now
   feature-complete (milestones below); "all features of RadioDJ" remains the long-term goal.
 
-## 2. Current state (as of `1eb2ed4`)
+## 2. Current state (as of `11e4c45`)
 
 Everything is committed; working tree clean. All tests green, clippy `-D warnings` clean
 for every crate except `radiocraft-window` on the host (see §7 for the exclude rule).
 Post-milestone feature-parity track (all in §5/§8): plugin hosting `eaf8170`+`27e3da6`+
 `577596f`+`77bafdb`, master sound FX `4317b15`, cart wall config/CRUD `281a1bb`,
-instant/cart-wall playback `835a86f`+`1eb2ed4`, cart-wall editor (next commit), internet
-streams Type 5 with ICY live titles (see §8).
+instant/cart-wall playback `835a86f`+`1eb2ed4`, cart-wall editor `1b5c493`, internet
+streams Type 5 with ICY live titles `11e4c45` (see §8).
 
 | v0.2 milestone (docs/05 numbering) | Status | Commit |
 |---|---|---|
@@ -335,6 +335,19 @@ Note: `Frame::Player.now` is now `Box<Option<NowInfo>>` (clippy `large_enum_vari
 JSON shape unchanged. History booking keeps the stored row's artist/title (RadioDJ books
 `curArtist`/`curTitle`, which it only rewrites for its own title overrides).
 
+Post-commit stream smoke fix (this commit): `StreamSource::read` was returning a sample
+count where the `Source` trait contract requires FRAMES (stereo pairs), which panicked in
+`player.rs` once the player sliced `scratch[..got * 2]`; it now pops interleaved frame
+pairs and returns frames. Also hardened the decoder: `open_pipeline` forces
+`pipeline.duration = None` (a stream server's first body chunk can let symphonia estimate
+a Xing-style length that would otherwise seed a VDF/stop-at plan and end playout after
+one chunk-copy), and `open_fails` only gives up (AutoDJ fallback) on a source that never
+delivered a single sample (`ever_decoded` flag) rather than one that merely reconnected.
+The default `EnvFilter` was `info,radiocraft=debug` — the crate targets are
+`radiocraft_audio`/`radiocraft_server`, which that directive never matches (prefix
+boundary must be `::`), so server DEBUG was silently off; now `info,radiocraft_server=debug`
+(use `RUST_LOG=info,radiocraft_audio=debug` for engine internals).
+
 Deferred fidelity checks (optional): cross-check `LoudnessCalculator.cs`. (Plugin_SoundProcessing
 FX keys/defaults were verified against the decompiles in `4317b15`.)
 
@@ -366,6 +379,18 @@ FX keys/defaults were verified against the decompiles in `4317b15`.)
   radiocraft_test" cargo test -p radiocraft-server --test commands`. Test tone copies are
   written under `/tmp/opencode/smoke-audio/parity-*.wav`; the test scrubs its own residue
   at start so repeated runs are idempotent. Without `RC_DB_TEST_DSN` the live test skips.
+- Internet-stream smoke (`/tmp/opencode/rc-stream-smoke/`): fake ICY server `icyd.py` on
+  `127.0.0.1:8099` (path `/stream.mp3`), serving `tone_id3.mp3` (13.8 s tone, ID3+Xing,
+  ICY metadata block with `StreamTitle=Radiocraft Smoke FM`) one chunk per 0.5 s with
+  deliberately shallow `SO_SNDBUF`/`SO_RCVBUF` (8192) and an abrupt mid-transfer drop
+  every 3rd cycle, so reconnect paths fire ~every 14 s. Drive via `wsprobe.py`
+  (hello+sub+`stream_add`+`play`) and WS frame watchers; server config dir `config/`
+  (points at scratch DB `radiocraft_test`). Standalone decoder repro without the server:
+  `cargo run --example streamtest -p radiocraft-audio -- http://127.0.0.1:8099/stream.mp3`
+  (prints decode rate, title-version bumps = reconnect count, `duration None`).
+  Verified live: playout survives unlimited icyd drops (`stream … reconnected (#N)` INFO
+  per drop), position keeps advancing across reconnects, ICY title frames keep flowing,
+  `dur: None` in now-playing.
 
 ## 10. Toolchain / environment quirks (hard-won)
 
