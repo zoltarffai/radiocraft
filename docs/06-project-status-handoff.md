@@ -1,15 +1,14 @@
 # Project status & handoff — RadioCraft
 
-Snapshot date: 2026-11-02. Latest code commits: `835a86f` (instant/cart-wall playback
-parity: `play_instant` op on a dedicated instant zone with temporary program duck,
-player-frame `instant` slot, `live_instant_play` test) + `1eb2ed4` (web instant wall —
-`CartWall.svelte` zone prop, mounted twice), on top of `281a1bb` (cart wall config +
-wall/button CRUD ops), the master FX trio `4317b15` (rewritten `radiocraft-audio` FX
-chain + server `soundfx` module with `fx_get`/`fx_set` ops persisting
-`Plugins/Plugin_SoundProcessing.xml` + Options ▸ Processing web tab), and the plugin
-trio `eaf8170` (host wiring), `27e3da6` (fixture + dylib e2e test), `577596f` (web plugin
-panel), and `77bafdb` (plugin boot-scan fix). No tags exist yet; branch is
-`master`. This document is the
+Snapshot date: 2026-11-02. Latest code commits: `a14ce31` (aux players backend:
+`Zone::AuxPlayer(u8)` dynamic zones + `auxplayers.rs` op set, `Plugin_AuxPlayers`
+parity) + `34c7c7f` (web aux players panel), on top of `d1c0e7d` (docs),
+`608511b` (web analyze progress), `b740530`/`35ea625` (.NET G15 number formatting),
+`e5bbcf9` (analyze-tracks sweep), `d8b5775` (cue-point detection port), `8aee5ac`
+(stream TLS fallback), `688b1c2` (stream smoke fixes), `11e4c45` (internet streams
+Type 5), `1b5c493` (cart-wall editor), `835a86f`+`1eb2ed4` (instant/cart-wall
+playback), `281a1bb` (cart wall CRUD), and the master FX commit `4317b15`.
+No tags exist yet; branch is `master`. This document is the
 single source of truth for "where everything stands" when a fresh session
 starts. Read it together with:
 
@@ -34,7 +33,7 @@ Recreate **RadioDJ v3.0.0.5** (Windows/.NET 4.8 radio playout app) as
   with the same UI code: a native Tauri window and a plain browser mode. v0.2 is now
   feature-complete (milestones below); "all features of RadioDJ" remains the long-term goal.
 
-## 2. Current state (as of `608511b`)
+## 2. Current state (as of `34c7c7f`)
 
 Everything is committed; working tree clean. All tests green, clippy `-D warnings` clean
 for every crate except `radiocraft-window` on the host (see §7 for the exclude rule).
@@ -44,7 +43,8 @@ instant/cart-wall playback `835a86f`+`1eb2ed4`, cart-wall editor `1b5c493`, inte
 streams Type 5 with ICY live titles `11e4c45`, stream smoke fixes `688b1c2`, stream TLS
 interop fallback to OpenSSL `8aee5ac`, cue-point detection port `d8b5775`, analyze-tracks
 sweep `e5bbcf9`, .NET G15 number formatting `35ea625` + duration-decimal fix `b740530`,
-web analyze progress `608511b` (see §8).
+web analyze progress `608511b`, aux players (`Plugin_AuxPlayers` parity) `a14ce31` +
+`34c7c7f` (see §8).
 
 | v0.2 milestone (docs/05 numbering) | Status | Commit |
 |---|---|---|
@@ -309,9 +309,11 @@ Still open:
    `tauri.conf.json`: targets deb/rpm, identifier `dev.radiocraft.window`).
 2. Cosmetic: on shell exit two benign GTK teardown warnings (appindicator known quirk) +
    libayatana deprecation warning — harmless.
-3. Feature parity gap: the `Plugin_AuxPlayers` contract (extra configurable zones beyond
-   the built-in four). Auto-fill silence detection (ThresholdStart/Next/End) is now
-   closed — see the analyze-tracks paragraph below.
+
+Feature parity is otherwise closed: the `Plugin_AuxPlayers` contract (extra configurable
+players beyond the built-in four zones) is done — see the aux-players paragraph below.
+Auto-fill silence detection (ThresholdStart/Next/End) is also closed — see the
+analyze-tracks paragraph below.
 
 The cart/instant wall editor is now closed: `web/src/lib/CartwallEditor.svelte` mirrors
 RadioDJ's wall configuration window — wall select/New/Rename/Delete, grid config
@@ -357,6 +359,30 @@ and rewrites `duration = CueNext - CueStart` (RadioDJ overwrites it; `decimal_fr
 now keeps G15 digits so DECIMAL(11,5) rounds like sqlserver, e.g. 6.99984 not 7.00000).
 Web UI: Analyze tracks button shows live status while running and the analyzed/skipped
 report on the broadcast (Session.onBroadcast). Live smoke verified end-to-end (§9).
+
+Plugin_AuxPlayers parity is now closed (`a14ce31` backend, `34c7c7f` web panel):
+`radiocraft-audio` gained `Zone::AuxPlayer(u8)` (1-based player number; the Zone enum
+derives Ord so render/wire order is base zones then aux1..auxN), and the engine render
+loop walks live slot keys sorted instead of the fixed four-zone array — aux slots are
+created lazily like every other zone, and the mixer strips/ducks them like Cart/Instant.
+`radiocraft-server/src/auxplayers.rs` keeps an `AuxTrack` slot per player and mirrors the
+reference behavior: settings in `settings_Plugin_AuxPlayers.xml` (`PlayersCount` 1..15
+default 3, `PluginZone` 1..10 default 4 — stored for config compatibility only, RadioCraft
+renders every player through the engine mixer — `StopFadeDuration` ms 0..10000 default 0,
+all ranges/defaults from `Var.cs` + `FormConfig.cs`), ops `aux_players_get_config` /
+`set_config` (live-swap; players beyond the new count are stopped + unloaded) /
+`load` (by `songId`, file `path` or stream URL) / `play` (start-from-0 vs fade-stop
+toggle; history booked at play start like `APlayer.PlayAux`, ad-hoc song_id-0 loads
+skipped; status line "Player N now playing: …") / `stop` (configured fade, keeps track) /
+`seek` / `loop` (select the track's loop region like `ButLoop`, error if the track has
+none) / `clear`. Player frames gained the `aux_players: [AuxPlayerInfo]` slot and
+`auxN` entries in `zones` (`zone_name`/`parse_zone` round trip). Web panel
+`web/src/lib/AuxPlayers.svelte` (per-player card: load by ID/path/URL, play/stop toggle,
+loop, fade-stop, clear, seek slider; Players + Stop-fade config row), session commands
+`auxLoad`/`auxPlay`/…. Live smoke: `/tmp/opencode/rc-aux-smoke.py` (defaults 3/4/0, arg
+clamps, load/play with history row, aux1 position advance in meters frames, seek,
+play-toggle stop, loop guard, clear, config grow to 5 + XML persisted + zone list
+follows, shrink retires players while player 1 keeps playing).
 
 Post-commit stream smoke fix (this commit): `StreamSource::read` was returning a sample
 count where the `Source` trait contract requires FRAMES (stereo pairs), which panicked in
@@ -445,6 +471,13 @@ FX keys/defaults were verified against the decompiles in `4317b15`.)
   `cue_times &sta=8.00013637542725...&xta=14.9999771118...&end=14.9994554519...&fou=-0.000521659...`,
   t2 `duration 4.99980`, `&sta=5.0002040863...&xta=10&end=10&fou=0` (oracle-validated
   within 5e-5 s, same tolerance as the cuepoints unit tests).
+- Aux-players smoke (`/tmp/opencode/rc-aux-smoke.py`, same `:8031` config dir):
+  exercises the aux_players_* op set end to end (defaults, clamps, load/play/seek/
+  stop/clear, meters-frame position advance on `aux1`, config grow/shrink with
+  `settings_Plugin_AuxPlayers.xml` persistence). Player frames are change-driven
+  snapshots (position 0 at play start); live positions ride the 20 Hz `meters`
+  frames. Careful reading `library_add` results: the reply key is `songId` — the
+  top-level `id` is the command id.
 
 ## 10. Toolchain / environment quirks (hard-won)
 
