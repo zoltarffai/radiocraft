@@ -3,6 +3,7 @@
   import { session } from "./lib/session.svelte";
   import NowPlaying from "./lib/NowPlaying.svelte";
   import CartWall from "./lib/CartWall.svelte";
+  import CartwallEditor from "./lib/CartwallEditor.svelte";
   import ZoneMixer from "./lib/ZoneMixer.svelte";
   import Database from "./lib/Database.svelte";
   import Library from "./lib/Library.svelte";
@@ -47,6 +48,7 @@
     <section class="col wide"><Library /></section>
     <section class="col wide"><CartWall /></section>
     <section class="col wide"><CartWall zone="instant" /></section>
+    <section class="col wide"><CartwallEditor /></section>
     <section class="col wide"><QueuePanel /></section>
     <section class="col wide"><PlaylistEditor /></section>
     <section class="col wide"><RotationEditor /></section>

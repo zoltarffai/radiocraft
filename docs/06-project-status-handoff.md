@@ -304,13 +304,18 @@ Still open:
    `tauri.conf.json`: targets deb/rpm, identifier `dev.radiocraft.window`).
 2. Cosmetic: on shell exit two benign GTK teardown warnings (appindicator known quirk) +
    libayatana deprecation warning — harmless.
-3. Cart/instant wall UI polish: the panel shows the button grid and plays from it, but
-   wall create/rename/delete and button assignment (pick a song for a slot) are not
-   wired in the web UI yet — the `cartwall_*` ops exist server-side; RadioDJ's
-   configuration window is the reference.
-4. Feature parity gaps: internet streams (song Type 5, ICY/SH metadata, `UseStreamTitle`),
+3. Feature parity gaps: internet streams (song Type 5, ICY/SH metadata, `UseStreamTitle`),
    auto-fill silence detection (ThresholdStart/Next/End), and the `Plugin_AuxPlayers`
    contract (extra configurable zones beyond the built-in four).
+
+The cart/instant wall editor is now closed: `web/src/lib/CartwallEditor.svelte` mirrors
+RadioDJ's wall configuration window — wall select/New/Rename/Delete, grid config
+(Columns/Rows/Stop-fade s/Auto-roll with explicit Apply), a `columns×rows` slot grid with
+per-slot Assign/Change/Clear plus color, a song picker over `search_songs`, live-slot
+highlight from `cartNow`/`instantNow`, and dirty-flag Save/Discard. Selected wall is
+hoisted in session state so both wall panels stay in sync. REST round trip verified
+against the running server (create/rename/save_buttons/list/play_cart/play_instant/
+delete + cleanup).
 
 Deferred fidelity checks (optional): cross-check `LoudnessCalculator.cs`. (Plugin_SoundProcessing
 FX keys/defaults were verified against the decompiles in `4317b15`.)

@@ -7,8 +7,10 @@ import type {
   AutodjPlan,
   AutodjStatus,
   CartButtonRow,
+  CartButtonSpec,
   CartHeader,
   CartNowInfo,
+  CartwallConfig,
   ClientMsg,
   CriteriaRow,
   DbConfigView,
@@ -88,6 +90,8 @@ class Session {
   instantNow = $state<CartNowInfo | null>(null);
   /** Wall currently shown on the cart/instant panels (shared by both). */
   selectedCart = $state<number | null>(null);
+  /** Grid config behind both walls (`cartwall_get_config` / `_set_config`). */
+  cartwallConfig = $state<CartwallConfig | null>(null);
   queue = $state<QueueRow[]>([]);
   history = $state<HistoryRow[]>([]);
   /** Row count of the last library_filter/history_filter (pagination). */
@@ -266,6 +270,31 @@ class Session {
     const r = await this.cmd<{ buttons: CartButtonRow[] }>("list_cart_buttons", { cartId: id });
     this.cartButtons = r.buttons ?? [];
     this.selectedCart = id;
+  }
+
+  // ---- cart/instant wall editor ops (cartwall.rs) --------------------------
+
+  /** Fetch the shared grid config into `cartwallConfig`. */
+  async loadCartwallConfig(): Promise<void> {
+    this.cartwallConfig = await this.cmd<CartwallConfig>("cartwall_get_config");
+  }
+  /** Partial update (`cartwall_set_config` echoes the whole config back). */
+  async setCartwallConfig(patch: Partial<CartwallConfig>): Promise<void> {
+    this.cartwallConfig = await this.cmd<CartwallConfig>("cartwall_set_config", patch);
+  }
+  async createCartWall(name: string): Promise<number> {
+    const r = await this.cmd<{ cartId: number }>("cartwall_create", { name });
+    return r.cartId;
+  }
+  renameCartWall(id: number, name: string): Promise<unknown> {
+    return this.cmd("cartwall_rename", { cartId: id, name });
+  }
+  deleteCartWall(id: number): Promise<unknown> {
+    return this.cmd("cartwall_delete", { cartId: id });
+  }
+  /** Replace a wall's full button layout (only assigned slots are sent). */
+  saveCartButtons(cartId: number, buttons: CartButtonSpec[]): Promise<unknown> {
+    return this.cmd("cartwall_save_buttons", { cartId, buttons });
   }
 
   // ---- library edit ops -----------------------------------------------------

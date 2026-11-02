@@ -276,6 +276,22 @@ export interface CartNowInfo {
   title: string;
 }
 
+/** Grid config of the cart/instant walls (`settings_cartwall.xml`). */
+export interface CartwallConfig {
+  columns: number;
+  rows: number;
+  /** Fade length in seconds when a rolled button is pressed again. */
+  fade: number;
+  autoRoll: boolean;
+}
+
+/** One row of a wall layout as `cartwall_save_buttons` takes it. */
+export interface CartButtonSpec {
+  slot: number;
+  songId: number;
+  color: string;
+}
+
 export interface CartButtonRow {
   ID: number;
   pID: number;
