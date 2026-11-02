@@ -1,0 +1,22 @@
+#!/usr/bin/env node
+// Invoke the @tauri-apps/cli native module as if it were the cargo-tauri
+// binary. cargo invokes subcommand executables as `cargo-tauri tauri <args>`,
+// so argv.slice(2) = ["tauri", <args>…]; the CLI's run(args, binName) API
+// takes those args (command token included) plus the binary name.
+import { createRequire } from "node:module";
+import { execSync } from "node:child_process";
+
+const require = createRequire(import.meta.url);
+const globalRoot =
+  process.env.NPM_GLOBAL_ROOT || execSync("npm root -g").toString().trim();
+const mod = require(globalRoot + "/@tauri-apps/cli");
+
+// The npm CLI entry treats argv[0] of its args as the subcommand directly
+// (`cargo tauri build` → cargo hands us ["build", …]). If invoked with an
+// explicit `tauri` token (direct script call), drop it.
+let args = process.argv.slice(2);
+if (args[0] === "tauri") args = args.slice(1);
+Promise.resolve(mod.run(args, "cargo-tauri")).catch((err) => {
+  console.error(err.message);
+  process.exit(1);
+});

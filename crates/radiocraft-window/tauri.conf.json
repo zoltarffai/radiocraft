@@ -15,11 +15,33 @@
   "bundle": {
     "active": true,
     "targets": ["deb", "rpm"],
-    "category": "AudioVideo",
+    "category": "Music",
+    "publisher": "RadioCraft",
+    "homepage": "https://github.com/radiocraft/radiocraft",
+    "license": "GPL-3.0-only",
+    "copyright": "Copyright (C) 2026 RadioCraft contributors",
+    "shortDescription": "Radio playout engine",
+    "longDescription": "RadioCraft is a radio playout application: music library, playlists, AutoDJ, cart walls, internet streams and a web/desktop UI. This package installs the desktop window shell; the engine server binary (radiocraft-server) is installed beside it and also runs standalone.",
+    "externalBin": [],
+    "resources": {
+      "../../web/dist/": "web/dist/"
+    },
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
       "icons/icon.png"
-    ]
+    ],
+    "linux": {
+      "deb": {
+        "files": {
+          "/usr/bin/radiocraft-server": "radiocraft-server"
+        }
+      },
+      "rpm": {
+        "files": {
+          "/usr/bin/radiocraft-server": "radiocraft-server"
+        }
+      }
+    }
   }
 }

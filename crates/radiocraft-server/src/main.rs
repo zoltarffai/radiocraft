@@ -37,14 +37,22 @@ async fn main() -> Result<()> {
     // advances. Safe because the engine lives inside this Arc and never moves.
     app.engine.start_pump();
 
-    // Serve the built web UI when it exists next to the binary.
-    let web_dist = run::resolve_web_dist([
-        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../web/dist"),
-        match std::env::current_exe() {
-            Ok(exe) => exe.parent().unwrap().join("web/dist"),
-            Err(_) => std::path::PathBuf::from("web/dist"),
-        },
-    ]);
+    // Serve the built web UI when it exists next to the binary, or at the
+    // FHS location used by the deb/rpm bundles (<bindir>/../lib/<pkg>/web/dist).
+    let exe = std::env::current_exe().ok();
+    let mut fallbacks = vec![std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../web/dist")];
+    if let Some(exe) = exe {
+        if let Some(dir) = exe.parent() {
+            fallbacks.push(dir.join("web/dist"));
+            if let Some(prefix) = dir.parent() {
+                // deb/rpm bundles install resources under <prefix>/lib/<product>/web/dist.
+                fallbacks.push(prefix.join("lib/RadioCraft/web/dist"));
+                fallbacks.push(prefix.join("lib/radiocraft-server/web/dist"));
+            }
+        }
+    }
+    let web_dist = run::resolve_web_dist(fallbacks);
     if let Some(dist) = &web_dist {
         tracing::info!("serving web UI from {}", dist.display());
     }

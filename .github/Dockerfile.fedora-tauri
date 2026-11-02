@@ -19,6 +19,18 @@ RUN dnf -y install \
       gettext \
       patch \
       fontconfig \
+      nodejs \
+      rpm-build \
+      dpkg \
     && dnf clean all
+
+# The tauri CLI ships as a napi native module (npm package @tauri-apps/cli);
+# `scripts/cargo-tauri` invokes it so the `cargo tauri` subcommand works.
+# Pinned to the tauri crate version in Cargo.lock (2.12.x). NPM_CONFIG_PREFIX
+# puts the global install under /usr/local (the fedora nodejs default prefix
+# does not host node_modules).
+COPY scripts/cargo-tauri /usr/local/bin/cargo-tauri
+ENV NPM_CONFIG_PREFIX=/usr/local
+RUN npm install -g @tauri-apps/cli@2.12 && chmod +x /usr/local/bin/cargo-tauri
 
 WORKDIR /src
