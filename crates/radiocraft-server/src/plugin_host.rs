@@ -1304,7 +1304,7 @@ impl Host for ServerHost {
         let path = self.app.config_dir.join(file);
         let mut store = radiocraft_settings::PluginSettings::load(&path).unwrap_or_default();
         store.set(key, value);
-        if let Err(e) = store.save() {
+        if let Err(e) = store.save_at(&path) {
             self.log(&format!("save_setting({file}: {key}) failed: {e}"));
         }
     }

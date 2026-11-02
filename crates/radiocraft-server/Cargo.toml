@@ -42,3 +42,5 @@ sqlx = { version = "0.8", default-features = false, features = [
 axum-test = { version = "21", features = ["ws"] }
 tokio-tungstenite = "0.24"
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "mysql"] }
+# Built as a cdylib alongside the test binary; plugin_dylib_e2e loads it.
+radiocraft-plugin-example = { path = "../radiocraft-plugin-example" }

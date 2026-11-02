@@ -3464,6 +3464,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "radiocraft-plugin-example"
+version = "0.1.0"
+dependencies = [
+ "radiocraft-plugin",
+ "serde_json",
+]
+
+[[package]]
 name = "radiocraft-server"
 version = "0.1.0"
 dependencies = [
@@ -3477,6 +3485,7 @@ dependencies = [
  "radiocraft-db",
  "radiocraft-net",
  "radiocraft-plugin",
+ "radiocraft-plugin-example",
  "radiocraft-settings",
  "rust_decimal",
  "serde",
