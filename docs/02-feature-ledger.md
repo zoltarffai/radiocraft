@@ -22,7 +22,7 @@ Complete RadioDJ v3.0.0.5 feature inventory, mined from shipped config samples (
 |---|---|---|
 | Playback zones | main player + zones 2/3/4 (aux/cart/instant) | separate BASS streams per zone |
 | Cue support | CueStart/End/Next/Intro/Outro/LoopIn/LoopOut/HookIn/HookOut, AutoSelectCue | seek-based cue points; cue-aware next-track |
-| Auto-fill | ThresholdStart/Next/End | silence-detection (BASS_CONFIG_REC_BUFFER capture) drives gap-free scheduler |
+| Auto-fill | ThresholdStart/Next/End | silence-detection (BASS_CONFIG_REC_BUFFER capture) drives gap-free scheduler. RadioCraft: ThresholdStart/Next/End detection ported (`radiocraft-audio::cuepoints`, Bass.Net DetectCuePoints, oracle-validated) and exposed as `analyze_tracks` sweep writing `cue_times`; scheduler consumes stored cue points via VDF |
 | Fades | dur_fadeout, in_Fade2Input, vol_overlay, vol_onsweeper, vol_vt, audio_mode, InputFadeIn/Out | crossfade engine w/ per-type volumes |
 | VDF | Type 7 Variable Duration File + SweeperIntroOverride, SweeperOverrideFit | dynamic filler length |
 | Streams | Type 5 internet streams (ICY/SH metadata, BassNet) | UseStreamTitle flag |

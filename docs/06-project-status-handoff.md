@@ -34,7 +34,7 @@ Recreate **RadioDJ v3.0.0.5** (Windows/.NET 4.8 radio playout app) as
   with the same UI code: a native Tauri window and a plain browser mode. v0.2 is now
   feature-complete (milestones below); "all features of RadioDJ" remains the long-term goal.
 
-## 2. Current state (as of `688b1c2`)
+## 2. Current state (as of `608511b`)
 
 Everything is committed; working tree clean. All tests green, clippy `-D warnings` clean
 for every crate except `radiocraft-window` on the host (see §7 for the exclude rule).
@@ -42,7 +42,9 @@ Post-milestone feature-parity track (all in §5/§8): plugin hosting `eaf8170`+`
 `577596f`+`77bafdb`, master sound FX `4317b15`, cart wall config/CRUD `281a1bb`,
 instant/cart-wall playback `835a86f`+`1eb2ed4`, cart-wall editor `1b5c493`, internet
 streams Type 5 with ICY live titles `11e4c45`, stream smoke fixes `688b1c2`, stream TLS
-interop fallback to OpenSSL (this commit) (see §8).
+interop fallback to OpenSSL `8aee5ac`, cue-point detection port `d8b5775`, analyze-tracks
+sweep `e5bbcf9`, .NET G15 number formatting `35ea625` + duration-decimal fix `b740530`,
+web analyze progress `608511b` (see §8).
 
 | v0.2 milestone (docs/05 numbering) | Status | Commit |
 |---|---|---|
@@ -131,7 +133,8 @@ playlist_move_item playlist_set_cues playlist_set_song`; queue
 queue_move` (ETA swap, args `{queueId,with}`); transport extra `play_next`; AutoDJ
 `autodj_set` (args `{enabled, config?}` → `{enabled,config}`), `autodj_status`
 (`{enabled,lastPickSongId,config}`), `autodj_plan` (dry run → `{rotationId,rotationName,
-criteriaId,pick,ordered,rejected,lastPickSongId}`), `autodj_play_next` (`{now,plan}`).
+criteriaId,pick,ordered,rejected,lastPickSongId}`), `autodj_play_next` (`{now,plan}`);
+tracks `analyze_tracks` (background sweep, see §8).
 
 Cart play parity (`play_cart`, mirrors `Plugin_InstantPlayers/CartButtonControl.set_PlayCart`):
 args `{buttonId}` or `{cartId,"number":slot}` (+ optional `fade` ms). Press rolls the linked
@@ -306,8 +309,9 @@ Still open:
    `tauri.conf.json`: targets deb/rpm, identifier `dev.radiocraft.window`).
 2. Cosmetic: on shell exit two benign GTK teardown warnings (appindicator known quirk) +
    libayatana deprecation warning — harmless.
-3. Feature parity gaps: auto-fill silence detection (ThresholdStart/Next/End), and the
-   `Plugin_AuxPlayers` contract (extra configurable zones beyond the built-in four).
+3. Feature parity gap: the `Plugin_AuxPlayers` contract (extra configurable zones beyond
+   the built-in four). Auto-fill silence detection (ThresholdStart/Next/End) is now
+   closed — see the analyze-tracks paragraph below.
 
 The cart/instant wall editor is now closed: `web/src/lib/CartwallEditor.svelte` mirrors
 RadioDJ's wall configuration window — wall select/New/Rename/Delete, grid config
@@ -335,6 +339,24 @@ title — RadioDJ's `UseStreamTitle` display behaviour). Web: Library "+ Stream"
 Note: `Frame::Player.now` is now `Box<Option<NowInfo>>` (clippy `large_enum_variant`);
 JSON shape unchanged. History booking keeps the stored row's artist/title (RadioDJ books
 `curArtist`/`curTitle`, which it only rewrites for its own title overrides).
+
+TracksManager analyze-tracks is now closed (`d8b5775` `e5bbcf9` `35ea625` `b740530`
+`608511b`): `radiocraft-audio::cuepoints` ports Bass.Net `DetectCuePoints` recovered from
+IL (two passes: forward first block >= level(S) -> cueStart, backward last block >=
+level(N) -> cueNext, then third pass with (N,E) only for cueEnd; f32 peaks, block clamps,
+EOF anchor; oracle-validated against live RadioDJ under wine, 13/13 assets). New op
+`analyze_tracks` mirrors `bwAnalyzeTracks`: args `{songIds?}` (omitted = sweep all types
+not in 5,8,9,11,12,13), thresholds `dbIn`/`dbNext`/`dbEnd` (defaults -24/-5/-30, min
+-100); it is a background sweep — the cmd reply only says `{started:N}`, progress flows as
+`status` pushes (`Analyzing n/total: path`), and completion broadcasts a `result` frame
+with `id:0, op:"analyze_tracks"` carrying `{analyzed,skipped,total,errors,status}` (final
+status text keeps RadioDJ's "analyzis" typo). Per track it rebuilds the full
+`&sta=&int=&pin=&pou=&hin=&hou=&out=&xta=&end=&fin=&fou=` string with G15 formatting
+(`playback::format_f64`, same routine .NET Framework `Conversions.ToString(double)` uses)
+and rewrites `duration = CueNext - CueStart` (RadioDJ overwrites it; `decimal_from_f64`
+now keeps G15 digits so DECIMAL(11,5) rounds like sqlserver, e.g. 6.99984 not 7.00000).
+Web UI: Analyze tracks button shows live status while running and the analyzed/skipped
+report on the broadcast (Session.onBroadcast). Live smoke verified end-to-end (§9).
 
 Post-commit stream smoke fix (this commit): `StreamSource::read` was returning a sample
 count where the `Source` trait contract requires FRAMES (stereo pairs), which panicked in
@@ -410,6 +432,19 @@ FX keys/defaults were verified against the decompiles in `4317b15`.)
   Verified live: playout survives unlimited icyd drops (`stream … reconnected (#N)` INFO
   per drop), position keeps advancing across reconnects, ICY title frames keep flowing,
   `dur: None` in now-playing.
+- Analyze-tracks smoke (`/tmp/opencode/rc-analyze-smoke.py` + config dir
+  `/tmp/opencode/rc-analyze-smoke/`, log `/tmp/opencode/rc-analyze-server.log`):
+  server on `:8031` via `RADIOCRAFT_BIND` (port is env, not flag; config dir is the
+  single positional arg). Script does hello → `sub` → db_configure/connect against
+  `radiocraft_test` → `analyze_tracks {songIds}` → watches `status` pushes until the
+  id-0 `analyze_tracks` broadcast. Note: WS pushes only flow after `sub`, `ready` frame
+  arrives before the hello reply, and result payloads are flattened into the frame
+  (no `data` key). Fixtures: `library_add` rows pointing at
+  `crates/radiocraft-audio/tests/assets/t1.wav`/`t2.wav`; at S/N/E = -20/-60/-40 the
+  expected DB state is t1 `duration 6.99984`,
+  `cue_times &sta=8.00013637542725...&xta=14.9999771118...&end=14.9994554519...&fou=-0.000521659...`,
+  t2 `duration 4.99980`, `&sta=5.0002040863...&xta=10&end=10&fou=0` (oracle-validated
+  within 5e-5 s, same tolerance as the cuepoints unit tests).
 
 ## 10. Toolchain / environment quirks (hard-won)
 
