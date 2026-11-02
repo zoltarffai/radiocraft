@@ -1,12 +1,15 @@
 # Project status & handoff — RadioCraft
 
-Snapshot date: 2026-11-02. Latest code commits: `a14ce31` (aux players backend:
-`Zone::AuxPlayer(u8)` dynamic zones + `auxplayers.rs` op set, `Plugin_AuxPlayers`
-parity) + `34c7c7f` (web aux players panel), on top of `d1c0e7d` (docs),
-`608511b` (web analyze progress), `b740530`/`35ea625` (.NET G15 number formatting),
-`e5bbcf9` (analyze-tracks sweep), `d8b5775` (cue-point detection port), `8aee5ac`
-(stream TLS fallback), `688b1c2` (stream smoke fixes), `11e4c45` (internet streams
-Type 5), `1b5c493` (cart-wall editor), `835a86f`+`1eb2ed4` (instant/cart-wall
+Snapshot date: 2026-11-02. Latest code commits: `80ff7a2` (packaging: tauri
+deb/rpm bundles built in the rc-tauri container; `scripts/package-linux.sh` +
+`scripts/cargo-tauri` CLI shim + FHS web-dist fallback) on top of `a14ce31`
+(aux players backend: `Zone::AuxPlayer(u8)` dynamic zones + `auxplayers.rs` op
+set, `Plugin_AuxPlayers` parity) + `34c7c7f` (web aux players panel),
+`d1c0e7d` (docs), `608511b` (web analyze progress), `b740530`/`35ea625`
+(.NET G15 number formatting), `e5bbcf9` (analyze-tracks sweep), `d8b5775`
+(cue-point detection port), `8aee5ac` (stream TLS fallback), `688b1c2`
+(stream smoke fixes), `11e4c45` (internet streams Type 5), `1b5c493`
+(cart-wall editor), `835a86f`+`1eb2ed4` (instant/cart-wall
 playback), `281a1bb` (cart wall CRUD), and the master FX commit `4317b15`.
 No tags exist yet; branch is `master`. This document is the
 single source of truth for "where everything stands" when a fresh session
@@ -33,7 +36,7 @@ Recreate **RadioDJ v3.0.0.5** (Windows/.NET 4.8 radio playout app) as
   with the same UI code: a native Tauri window and a plain browser mode. v0.2 is now
   feature-complete (milestones below); "all features of RadioDJ" remains the long-term goal.
 
-## 2. Current state (as of `34c7c7f`)
+## 2. Current state (as of `80ff7a2`)
 
 Everything is committed; working tree clean. All tests green, clippy `-D warnings` clean
 for every crate except `radiocraft-window` on the host (see §7 for the exclude rule).
@@ -44,7 +47,7 @@ streams Type 5 with ICY live titles `11e4c45`, stream smoke fixes `688b1c2`, str
 interop fallback to OpenSSL `8aee5ac`, cue-point detection port `d8b5775`, analyze-tracks
 sweep `e5bbcf9`, .NET G15 number formatting `35ea625` + duration-decimal fix `b740530`,
 web analyze progress `608511b`, aux players (`Plugin_AuxPlayers` parity) `a14ce31` +
-`34c7c7f` (see §8).
+`34c7c7f` (see §8), deb/rpm bundles for the window shell `80ff7a2` (see §7).
 
 | v0.2 milestone (docs/05 numbering) | Status | Commit |
 |---|---|---|
@@ -54,6 +57,7 @@ web analyze progress `608511b`, aux players (`Plugin_AuxPlayers` parity) `a14ce3
 | CI/packaging Linux-only; AppImage wraps server+web | ✅ | `6d7e0fc` |
 | egui `radiocraft-app` retired, logic migrated | ✅ | `10707cf` |
 | 4. Tauri window shell + tray; close policy | ✅ | `717c412` |
+| 4b. deb/rpm bundles for the window shell | ✅ installed + smoke-tested | `80ff7a2` |
 | 5. LAN/token auth mode | ✅ verified live | (token mode predates `717c412`) |
 | 3. Library/playlist/history window parity | ✅ | `24a20e9`, `d5f72d9`, `0904464` |
 
@@ -215,7 +219,9 @@ RadioDJ `cue_times` DB string: `&sta= &int= &pin=/&pou= &hin=/&hou= &out= &xta= 
   builds sequentially), **no sudo**. Node v24.22.2 / npm 11.19.1. `export PATH=$HOME/.cargo/bin:$PATH`.
 - **podman** (docker absent). Images: `localhost/manyrust` (AlmaLinux 8.10, glibc 2.28, for
   AppImage), `localhost/rc-tauri` (built from `.github/Dockerfile.fedora-tauri`, fedora:44 +
-  webkit2gtk4.1/gtk3/libappindicator-gtk3/librsvg2/alsa-lib devel + cargo-clippy).
+  webkit2gtk4.1/gtk3/libappindicator-gtk3/librsvg2/alsa-lib devel + cargo-clippy + nodejs +
+  global `@tauri-apps/cli@2.12` + `/usr/local/bin/cargo-tauri` shim + rpm-build + dpkg, so
+  `cargo tauri build` works inside it).
 - Tauri compile flow (host lacks the -devel packages):
   1. Fresh stage copy — NEVER share host `target/` with container:
      `rm -rf /tmp/rc-tauri-ctx && tar -c -C . Cargo.toml Cargo.lock crates scripts .github | tar -x -C /tmp/rc-tauri-ctx`
@@ -233,6 +239,11 @@ RadioDJ `cue_times` DB string: `&sta= &int= &pin=/&pou= &hin=/&hou= &out= &xta= 
   test/clippy (documented in docs/05).
 - Packaging gotchas: linuxdeploy corrupts musl static binaries → manylinux glibc-dynamic only;
   `APPIMAGE_EXTRACT_AND_RUN=1` in containers.
+- deb/rpm bundles: `bash scripts/package-linux.sh` (builds server + web on host, stages a
+  clean copy under /tmp/rc-pkg, runs `cargo tauri build -b deb rpm` in `localhost/rc-tauri`
+  with the `rc-window-target` volume, copies bundles to `dist/`, then verifies layout with
+  dpkg-deb/rpm -qlp). Install smoke passed: both packages install in the container and the
+  installed `/usr/bin/radiocraft-server` finds its web UI at `/usr/lib/RadioCraft/web/dist`.
 
 ## 8. Remaining work / known gaps
 
@@ -305,10 +316,21 @@ thread stopped".
 
 Still open:
 
-1. Packaging for the shell: `cargo tauri build` deb/rpm job (bundle config already in
-   `tauri.conf.json`: targets deb/rpm, identifier `dev.radiocraft.window`).
-2. Cosmetic: on shell exit two benign GTK teardown warnings (appindicator known quirk) +
+1. Cosmetic: on shell exit two benign GTK teardown warnings (appindicator known quirk) +
    libayatana deprecation warning — harmless.
+
+Packaging for the shell is now closed (`80ff7a2`): `scripts/package-linux.sh` builds
+`RadioCraft_0.2.0_amd64.deb` + `RadioCraft-0.2.0-1.x86_64.rpm` in the `localhost/rc-tauri`
+container via `cargo tauri build -b deb rpm`. The tauri CLI is the napi npm package
+`@tauri-apps/cli@2.12` (pinned to the `tauri` crate in Cargo.lock) — the host node 24/glibc
+2.43 cannot load the native module, so the CLI only runs inside the image, where
+`scripts/cargo-tauri` exposes it as `cargo tauri` (it calls the module's
+`run(args, binName)` API; cargo already strips the `tauri` token). Bundle layout
+(verified with dpkg-deb -c / rpm -qlp, and both packages were installed in the container
+and booted against the live smoke DB): `/usr/bin/radiocraft-window` + sibling
+`/usr/bin/radiocraft-server` (via `bundle.linux.{deb,rpm}.files`, satisfying the
+`spawn_server` sibling lookup) + resources under `/usr/lib/RadioCraft/web/dist` (the
+server's `resolve_web_dist` gained that FHS fallback, so no env var is needed).
 
 Feature parity is otherwise closed: the `Plugin_AuxPlayers` contract (extra configurable
 players beyond the built-in four zones) is done — see the aux-players paragraph below.
@@ -509,13 +531,23 @@ FX keys/defaults were verified against the decompiles in `4317b15`.)
   `frontendDist` dir to exist (`crates/radiocraft-window/dist/index.html` placeholder — keep
   it tracked, `.gitignore` has `!crates/radiocraft-window/dist/` exception); icons must be
   truecolor+alpha PNG (`magick -define png:color-type=6`).
+- Tauri bundler (2.12): `bundle.category` is a strict whitelist (Business, …, **Music**,
+  News, …) — `AudioVideo` is NOT valid ("failed to build bundler settings: invalid category";
+  the desktop file still gets `Categories=AudioVideo;Audio;Music;`).
+  `bundle.resources` values install under `$PREFIX/lib/<productName>/` — for deb/rpm that is
+  `/usr/lib/RadioCraft/…` (productName casing, NOT the kebab package name), and the server
+  fallback path list must match that. `bundle.linux.{deb,rpm}.files` maps absolute install
+  path -> file relative to the crate dir; used to ship the sibling server binary. deb package
+  name is lowercased/kebabbed (`radio-craft`); rpm needs `rpm-build`, deb needs `dpkg` in the
+  image. The npm CLI entry (`main.js`) exports `run(args, binName)` — args start at the
+  subcommand (`["build", …]`), NOT full argv.
 - Git identity is repo-local `RadioCraft <dev@radio…f.local>`; commit style: short scope
   prefix (`window:`, `server:`, `web:`, `ci,scripts:`).
 
 ## 11. Quick session-start checklist
 
 1. `cd /home/john/Dev/radiocraft && export PATH=$HOME/.cargo/bin:$PATH`
-2. `git log --oneline -3` (expect `77bafdb` or newer), `git status` (expect clean)
+2. `git log --oneline -3` (expect `80ff7a2` or newer), `git status` (expect clean)
 3. Check infra: `ss -H -lnt '( sport = :8030 )'` (server), `ss -H -lnt '( sport = :3306 )'`
    (MariaDB); restart per §9 if down.
 4. `cargo test --workspace --exclude radiocraft-window && cargo clippy --workspace --exclude
