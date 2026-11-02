@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 use anyhow::{Context as _, Result};
 
-use radiocraft_server::{http, pump, run, state::App};
+use radiocraft_server::{http, plugin_host, pump, run, state::App};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -56,6 +56,12 @@ async fn main() -> Result<()> {
 
     pump::spawn_pump(Arc::clone(&Arc::clone(&app)));
 
+    // Plugin dispatcher thread: scans <config-dir>/Plugins for cdylibs and
+    // hosts them against a shim implementing the radiocraft-plugin ABI.
+    // Started from the main tokio runtime so host SQL round-trips reuse it.
+    let plugins = plugin_host::PluginManager::start(Arc::clone(&app));
+    app.attach_plugins(plugins);
+
     let bind = std::env::var("RADIOCRAFT_BIND").unwrap_or_else(|_| "127.0.0.1:8030".to_string());
     let listener = tokio::net::TcpListener::bind(&bind)
         .await
@@ -90,6 +96,10 @@ async fn shutdown_signal(app: Arc<App>) {
     tokio::select! {
         () = ctrl_c => tracing::info!("SIGINT received"),
         () = terminate => tracing::info!("SIGTERM received"),
+    }
+
+    if let Some(mgr) = app.plugin_manager() {
+        mgr.shutdown();
     }
 
     let taken = app.take_now_for_booking();

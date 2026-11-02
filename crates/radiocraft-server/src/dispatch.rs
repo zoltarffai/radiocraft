@@ -585,8 +585,80 @@ async fn run(app: &Arc<App>, op: &str, args: &Value) -> Result<Value> {
         "export_set" => crate::settings::op_export_set(app, args),
         "export_test" => crate::settings::op_export_test(app).await,
 
+        // ---- plugin manager (external cdylib plugins) ------------------------
+        "plugin_list" => plugin_op_list(app).await,
+        "plugin_load" => plugin_op_load(app, args).await,
+        "plugin_unload" => plugin_op_unload(app, args).await,
+        "plugin_invoke" => plugin_op_invoke(app, args).await,
+
         other => Err(anyhow!("unknown op {other}")),
     }
+}
+
+// ---- plugin ops -------------------------------------------------------------
+//
+// The manager methods round-trip over a channel to the plugin thread with
+// `blocking_recv`, so they run on the blocking pool, never on a worker.
+
+/// Shared: clone the manager handle out of `App` (error if not attached).
+fn plugin_mgr(app: &Arc<App>) -> Result<Arc<crate::plugin_host::PluginManager>> {
+    app.plugin_manager()
+        .map(Arc::clone)
+        .context("plugin manager is not running")
+}
+
+async fn plugin_op_list(app: &Arc<App>) -> Result<Value> {
+    let mgr = plugin_mgr(app)?;
+    tokio::task::spawn_blocking(move || mgr.list())
+        .await
+        .context("plugin thread join")
+}
+
+async fn plugin_op_load(app: &Arc<App>, args: &Value) -> Result<Value> {
+    let mgr = plugin_mgr(app)?;
+    let raw = args.get("path").and_then(Value::as_str).context("path required")?;
+    // Relative paths resolve against the Plugins folder the scan uses.
+    let path = {
+        let p = PathBuf::from(raw);
+        if p.is_absolute() {
+            p
+        } else {
+            app.config_dir.join("Plugins").join(p)
+        }
+    };
+    let id = tokio::task::spawn_blocking(move || mgr.load(path))
+        .await
+        .context("plugin thread join")?
+        .map_err(anyhow::Error::msg)?;
+    Ok(json!({ "id": id }))
+}
+
+async fn plugin_op_unload(app: &Arc<App>, args: &Value) -> Result<Value> {
+    let mgr = plugin_mgr(app)?;
+    let id = args.get("id").and_then(Value::as_u64).context("id required")?;
+    let done = tokio::task::spawn_blocking(move || mgr.unload(id))
+        .await
+        .context("plugin thread join")?;
+    Ok(json!({ "unloaded": done }))
+}
+
+async fn plugin_op_invoke(app: &Arc<App>, args: &Value) -> Result<Value> {
+    let mgr = plugin_mgr(app)?;
+    let action = args
+        .get("action")
+        .and_then(Value::as_str)
+        .context("action required")?
+        .to_string();
+    let call_args: Vec<String> = args
+        .get("args")
+        .and_then(Value::as_array)
+        .map(|a| a.iter().map(|v| v.to_string()).collect())
+        .unwrap_or_default();
+    let matched = tokio::task::spawn_blocking(move || mgr.invoke(&action, &call_args))
+        .await
+        .context("plugin thread join")?
+        .map_err(anyhow::Error::msg)?;
+    Ok(json!({ "matched": matched }))
 }
 
 // ---- play / cue -------------------------------------------------------------
@@ -1034,6 +1106,65 @@ mod tests {
             }
             other => panic!("expected result, got {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn plugin_ops_without_manager_are_errors() {
+        let app = tmp_app();
+        for (op, args) in [
+            ("plugin_list", json!({})),
+            ("plugin_load", json!({"path": "foo.so"})),
+            ("plugin_unload", json!({"id": 1})),
+            ("plugin_invoke", json!({"action": "Ping", "args": []})),
+        ] {
+            let frame = dispatch(&app, 4, op, &args).await;
+            match frame {
+                Frame::Error { message, .. } => {
+                    assert!(message.contains("plugin manager"), "{op}: {message}");
+                }
+                other => panic!("{op}: expected error, got {other:?}"),
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn plugin_ops_answer_with_manager_attached() {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("rc-dispatch-plug-{}-{nanos}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let app = Arc::new(App::load(&dir).expect("load"));
+        let mgr = crate::plugin_host::PluginManager::start(Arc::clone(&app));
+        app.attach_plugins(mgr);
+
+        // list round-trips to the plugin thread through the manager's own
+        // spawn_blocking inside the op; the test just awaits the frame.
+        let frame = dispatch(&app, 5, "plugin_list", &json!({})).await;
+        match frame {
+            Frame::Result { data, .. } => assert_eq!(data["plugins"], json!([])),
+            other => panic!("expected result, got {other:?}"),
+        }
+
+        // A non-library path fails the ABI gate instead of panicking.
+        let bogus = dir.join("Plugins").join("bogus.so");
+        std::fs::create_dir_all(dir.join("Plugins")).unwrap();
+        std::fs::write(&bogus, b"not a shared object").unwrap();
+        let frame = dispatch(&app, 6, "plugin_load", &json!({"path": "bogus.so"})).await;
+        match frame {
+            Frame::Error { message, .. } => assert!(!message.is_empty(), "{message}"),
+            other => panic!("expected error, got {other:?}"),
+        }
+
+        // Unknown ids report unloaded:false rather than an error.
+        let frame = dispatch(&app, 7, "plugin_unload", &json!({"id": 999})).await;
+        match frame {
+            Frame::Result { data, .. } => assert_eq!(data["unloaded"], json!(false)),
+            other => panic!("expected result, got {other:?}"),
+        }
+
+        app.plugin_manager().expect("manager").shutdown();
     }
 
     #[tokio::test]

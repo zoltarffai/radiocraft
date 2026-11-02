@@ -214,6 +214,9 @@ pub struct App {
     autodj: AutodjState,
     pub status: RwLock<Status>,
     pub tx: broadcast::Sender<Frame>,
+    /// External-cdylib plugin dispatcher; attached once by the server binary
+    /// (`PluginManager::start`). Stays empty for in-process test apps.
+    pub plugins: std::sync::OnceLock<Arc<crate::plugin_host::PluginManager>>,
 }
 
 /// AutoDJ runtime state: the enable switch (seeded from
@@ -321,7 +324,28 @@ impl App {
             autodj,
             status: RwLock::new(Status::info("Not connected to the database")),
             tx,
+            plugins: std::sync::OnceLock::new(),
         })
+    }
+
+    /// Attach the plugin dispatcher (called once at server startup; later
+    /// calls are ignored).
+    pub fn attach_plugins(&self, mgr: Arc<crate::plugin_host::PluginManager>) {
+        let _ = self.plugins.set(mgr);
+    }
+
+    /// The plugin dispatcher, when one has been attached.
+    pub fn plugin_manager(&self) -> Option<&Arc<crate::plugin_host::PluginManager>> {
+        self.plugins.get()
+    }
+
+    /// Broadcast a host state change to every plugin (no-op for in-process
+    /// test apps without a dispatcher). Queued on the plugin thread; never
+    /// blocks the caller.
+    pub fn notify_plugins(&self, info: radiocraft_plugin::host::StateInfo) {
+        if let Some(mgr) = self.plugin_manager() {
+            mgr.notify(info);
+        }
     }
 
     /// Where the settings files live.
@@ -517,6 +541,12 @@ impl App {
         self.autodj
             .enabled
             .store(enabled, std::sync::atomic::Ordering::Relaxed);
+        use radiocraft_plugin::host::{StateChange, StateInfo};
+        self.notify_plugins(StateInfo::new(if enabled {
+            StateChange::AutoDjEnabled
+        } else {
+            StateChange::AutoDjDisabled
+        }));
     }
 
     /// Current scheduler tuning knobs.

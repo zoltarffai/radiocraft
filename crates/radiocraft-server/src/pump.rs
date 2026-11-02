@@ -9,8 +9,9 @@ use std::time::{Duration, Instant};
 
 use radiocraft_audio::mixer::Zone;
 use radiocraft_audio::player::PlayerEvent;
+use radiocraft_plugin::host::{StateChange, StateInfo};
 
-use crate::state::{App, MAIN_ZONE};
+use crate::state::{App, CartNow, MAIN_ZONE, NowPlaying};
 
 /// 20 Hz meter tick.
 pub const PUMP_INTERVAL: Duration = Duration::from_millis(50);
@@ -23,9 +24,19 @@ pub fn spawn_pump(app: Arc<App>) -> tokio::task::JoinHandle<()> {
         // AutoDJ retry throttle so a permanently empty pool never hammers
         // the database at the meter rate.
         let mut last_fill: Option<Instant> = None;
+        // Plugin state-change fan-out: remember what sounded last tick.
+        let mut prev_main: Option<NowPlaying> = None;
+        let mut prev_cart: Option<CartNow> = None;
+        let mut last_timer = Instant::now();
         loop {
             ticker.tick().await;
             drain_events(&app).await;
+            fan_state_changes(
+                &app,
+                &mut prev_main,
+                &mut prev_cart,
+                &mut last_timer,
+            );
             if app.autodj_enabled()
                 && app.current_now_playing().is_none()
                 && !app.engine.is_playing(MAIN_ZONE)
@@ -43,6 +54,57 @@ pub fn spawn_pump(app: Arc<App>) -> tokio::task::JoinHandle<()> {
 
 /// Minimum gap between AutoDJ fill attempts.
 const AUTODJ_RETRY: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// SmartEvents-style plugin timer cadence.
+const PLUGIN_TIMER: std::time::Duration = std::time::Duration::from_secs(1);
+
+/// Diff last-tick transport state against now and broadcast the resulting
+/// host `StateChanged` calls to plugins (`PlayerStarted/Ended`,
+/// `CartStarted/Ended`, periodic `Timer`). Payloads mirror the reference:
+/// a SongData JSON for the player, the button id for carts.
+fn fan_state_changes(
+    app: &Arc<App>,
+    prev_main: &mut Option<NowPlaying>,
+    prev_cart: &mut Option<CartNow>,
+    last_timer: &mut Instant,
+) {
+    if app.plugin_manager().is_none() {
+        return;
+    }
+    let cur_main = app.current_now_playing();
+    if cur_main.as_ref().map(|n| n.song_id) != prev_main.as_ref().map(|n| n.song_id) {
+        if let Some(old) = prev_main.take() {
+            let data = serde_json::to_value(old.song_data()).unwrap_or_default();
+            app.notify_plugins(StateInfo::with_data(StateChange::PlayerEnded, data));
+        }
+        if let Some(cur) = &cur_main {
+            let data = serde_json::to_value(cur.song_data()).unwrap_or_default();
+            app.notify_plugins(StateInfo::with_data(StateChange::PlayerStarted, data.clone()));
+            app.notify_plugins(StateInfo::with_data(StateChange::CurrentlyPlayingChanged, data));
+        }
+        *prev_main = cur_main;
+    }
+    let cur_cart = app.cart_now();
+    if cur_cart.as_ref().map(|c| c.button_id) != prev_cart.as_ref().map(|c| c.button_id) {
+        if let Some(old) = prev_cart.take() {
+            app.notify_plugins(StateInfo::with_data(
+                StateChange::CartEnded,
+                serde_json::json!(old.button_id),
+            ));
+        }
+        if let Some(cur) = &cur_cart {
+            app.notify_plugins(StateInfo::with_data(
+                StateChange::CartStarted,
+                serde_json::json!(cur.button_id),
+            ));
+        }
+        *prev_cart = cur_cart;
+    }
+    if last_timer.elapsed() >= PLUGIN_TIMER {
+        *last_timer = Instant::now();
+        app.notify_plugins(StateInfo::new(StateChange::Timer));
+    }
+}
 
 /// Forward engine events: finished/segue transitions close out now-playing
 /// and run the booking for the item that just ended.

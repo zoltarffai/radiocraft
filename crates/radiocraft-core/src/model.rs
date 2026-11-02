@@ -46,8 +46,14 @@ impl TrackType {
     }
 }
 
+impl From<TrackType> for i32 {
+    fn from(t: TrackType) -> Self {
+        t as i32
+    }
+}
+
 /// Track record, port of rdjInterface.SongData (analysis/songdata-members.txt).
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct SongData {
     pub id: i64,
     pub id_genre: i64,

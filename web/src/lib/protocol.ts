@@ -50,6 +50,46 @@ export interface StatusInfo {
   message: string;
 }
 
+/** Host state-change fan-out (`host.rs::StateChange`, snake_case). */
+export type StateChangeName =
+  | "player_started"
+  | "player_ended"
+  | "cart_started"
+  | "cart_ended"
+  | "currently_playing_changed"
+  | "auto_dj_enabled"
+  | "auto_dj_disabled"
+  | "assisted_enabled"
+  | "manual_enabled"
+  | "paused"
+  | "resumed"
+  | "playlist_changed"
+  | "tracks_reloaded"
+  | "timer"
+  | { other: number };
+
+/** Payload of a plugin state change (`host.rs::StateInfo`). */
+export interface StateInfo {
+  feature: StateChangeName;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  data?: any;
+}
+
+/** UI window a plugin asks the host to open (`host.rs::PluginUiRequest`). */
+export type PluginUiRequest =
+  | { kind: "track_details"; track: Record<string, unknown>; refresh_playlist: boolean; position: number }
+  | { kind: "track_details_window"; track: Record<string, unknown> }
+  | { kind: "track_editor"; track: Record<string, unknown>; plugin_name: string; position: number }
+  | { kind: "categories_editor" }
+  | {
+      kind: "tracks_window";
+      plugin_name: string;
+      track_type: number;
+      max_track_duration: number;
+      position: number;
+    }
+  | { kind: "import_folder" };
+
 /** Server → client frames (`t` tag). */
 export type Frame =
   | {
@@ -66,6 +106,12 @@ export type Frame =
   | { t: "meters"; master: LevelInfo; zones: ZoneState[] }
   | { t: "state"; master_db: DbWire; zones: ZoneMix[] }
   | ({ t: "status" } & StatusInfo)
+  | {
+      t: "plugin_event";
+      plugin: string;
+      state?: StateInfo;
+      ui?: PluginUiRequest;
+    }
   | { t: "pong" };
 
 /** Client → server messages. */

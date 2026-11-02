@@ -69,6 +69,9 @@ class Session {
   mix = $state<ZoneMix[]>([]);
   status = $state<StatusInfo>({ level: "info", message: "Not connected" });
 
+  /** Recent plugin host events (state fan-out / UI requests), newest last. */
+  pluginEvents = $state<{ plugin: string; at: string; text: string }[]>([]);
+
   /** Library/window data loaded on demand by the windows. */
   dbConnected = $state(false);
   /** Increments on every successful DB connect; windows use it to auto-refresh. */
@@ -547,6 +550,17 @@ class Session {
         }
         if (f.code === "unauthorized") this.authRequired = true;
         this.lastError = `${f.code}: ${f.message}`;
+        break;
+      }
+      case "plugin_event": {
+        const desc = f.state
+          ? typeof f.state.feature === "string"
+            ? f.state.feature
+            : `other(${f.state.feature.other})`
+          : f.ui
+            ? `ui:${f.ui.kind}`
+            : "event";
+        this.pluginEvents = [...this.pluginEvents.slice(-49), { plugin: f.plugin, at: new Date().toISOString(), text: desc }];
         break;
       }
       case "pong":

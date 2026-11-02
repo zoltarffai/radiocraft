@@ -93,6 +93,42 @@ async fn rest_cmd_mirror_returns_flat_payloads() {
 }
 
 #[tokio::test]
+async fn rest_cmd_plugin_ops_mirror_dispatch() {
+    // No manager attached: every plugin op maps to cmd_failed.
+    let server = TestServer::builder()
+        .http_transport()
+        .build(router(test_app(), Arc::new(Auth::default()), None));
+    let res = server.post("/api/cmd/plugin_list").text("{}").await;
+    res.assert_status(axum::http::StatusCode::BAD_REQUEST);
+    let body: serde_json::Value = res.json();
+    assert_eq!(body["code"], "cmd_failed");
+    assert!(body["message"].as_str().unwrap().contains("plugin manager"));
+
+    // With a manager attached, the same ops answer with flat payloads.
+    let app = test_app();
+    let mgr = radiocraft_server::plugin_host::PluginManager::start(Arc::clone(&app));
+    app.attach_plugins(mgr.clone());
+    let server = TestServer::builder()
+        .http_transport()
+        .build(router(app, Arc::new(Auth::default()), None));
+
+    let res = server.post("/api/cmd/plugin_list").text("{}").await;
+    res.assert_status_ok();
+    let body: serde_json::Value = res.json();
+    assert_eq!(body["plugins"], serde_json::json!([]));
+
+    let res = server
+        .post("/api/cmd/plugin_unload")
+        .json(&serde_json::json!({"id": 999}))
+        .await;
+    res.assert_status_ok();
+    let body: serde_json::Value = res.json();
+    assert_eq!(body["unloaded"], serde_json::json!(false));
+
+    mgr.shutdown();
+}
+
+#[tokio::test]
 async fn rest_token_gate_applies_to_api() {
     let server = TestServer::builder()
         .http_transport()

@@ -15,6 +15,7 @@ radiocraft-db.workspace = true
 radiocraft-audio.workspace = true
 radiocraft-settings.workspace = true
 radiocraft-net.workspace = true
+radiocraft-plugin.workspace = true
 anyhow.workspace = true
 axum = { version = "0.8", features = ["ws"] }
 tower-http = { version = "0.6", features = ["fs"] }
@@ -27,6 +28,15 @@ tracing.workspace = true
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tokio = { workspace = true, features = ["signal"] }
 rust_decimal.workspace = true
+# raw-SQL execution for the plugin host (`Host::mysql_query`/`mysql_insert`).
+sqlx = { version = "0.8", default-features = false, features = [
+    "runtime-tokio",
+    "macros",
+    "mysql",
+    "chrono",
+    "rust_decimal",
+    "tls-rustls-ring",
+] }
 
 [dev-dependencies]
 axum-test = { version = "21", features = ["ws"] }

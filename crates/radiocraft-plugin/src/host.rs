@@ -126,8 +126,7 @@ impl StateInfo {
 
 /// A UI window the host is asked to open, modeling the `Show*` members of
 /// IHost. The host queues these for its GUI/event-loop layer.
-// No `PartialEq`: core's `SongData` does not implement it and UI payloads carry songs.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum PluginUiRequest {
     /// `void ShowTrackDetails(TrackPlayer trackData, bool RefreshPlaylist, int Position = -1)`

@@ -151,6 +151,16 @@ pub enum Frame {
     },
     /// Status line update.
     Status(StatusInfo),
+    /// Plugin-originated event: a host `StateChanged` fan-out or a UI
+    /// window request (see `radiocraft-plugin` host contract). The payloads
+    /// are boxed to keep the frame enum lean (they are usually absent).
+    PluginEvent {
+        plugin: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        state: Option<Box<radiocraft_plugin::host::StateInfo>>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        ui: Option<Box<radiocraft_plugin::host::PluginUiRequest>>,
+    },
     /// Reply to `{"t":"ping"}`.
     Pong {},
 }

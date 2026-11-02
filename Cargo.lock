@@ -3476,6 +3476,7 @@ dependencies = [
  "radiocraft-core",
  "radiocraft-db",
  "radiocraft-net",
+ "radiocraft-plugin",
  "radiocraft-settings",
  "rust_decimal",
  "serde",
