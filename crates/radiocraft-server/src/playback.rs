@@ -230,10 +230,41 @@ pub fn build_cue_times(t: &CueTokens) -> String {
     out
 }
 
-/// .NET `Conversions.ToString(double)`-ish: shortest digits, whole numbers
-/// without a fraction (VB prints `15`, not `15.0` — Rust's Display agrees).
+/// .NET Framework `Conversions.ToString(double)` = `Double.ToString()` =
+/// "G15": 15 significant digits, trailing zeros dropped, plain decimal
+/// unless the exponent is < -5 or >= 15 (then `d.dddE±NN`). So the
+/// `end - next` subtraction noise prints as `-0.000500000000000611`,
+/// not Rust's shortest-round-trip `-0.0005000000000006111`.
 fn format_f64(v: f64) -> String {
-    v.to_string()
+    if !v.is_finite() {
+        return v.to_string();
+    }
+    if v == 0.0 {
+        return "0".into();
+    }
+    // 15 significant digits, scientific, e.g. "-5.00000000000611e-4".
+    let sci = format!("{:.14e}", v);
+    let (m, e) = sci.split_once('e').expect("format produces e");
+    let e: i32 = e.parse().expect("format produces integer exponent");
+    let neg = m.starts_with('-');
+    let digits = m.trim_start_matches('-').replace('.', "");
+    let sign = if neg { "-" } else { "" };
+    // G-style exponent rules: scientific outside [-4,15) exponents.
+    if !(-4..15).contains(&e) {
+        let frac = digits[1..].trim_end_matches('0').trim_end_matches('.');
+        let mant =
+            if frac.is_empty() { digits[..1].to_string() } else { format!("{}.{}", &digits[..1], frac) };
+        return format!("{sign}{mant}E{}{:02}", if e < 0 { '-' } else { '+' }, e.abs());
+    }
+    let point = e + 1; // decimal point position within `digits`
+    let s = if point <= 0 {
+        format!("0.{}{}", "0".repeat(-point as usize), digits)
+    } else if point >= digits.len() as i32 {
+        format!("{}{}", digits, "0".repeat(point as usize - digits.len()))
+    } else {
+        format!("{}.{}", &digits[..point as usize], &digits[point as usize..])
+    };
+    format!("{sign}{}", s.trim_end_matches('0').trim_end_matches('.'))
 }
 
 /// Open the media for `path` and build the `PlayRequest` for it (cue plan +
@@ -482,7 +513,25 @@ mod tests {
         };
         assert_eq!(
             build_cue_times(&t),
-            "&sta=0&int=0&pin=0&pou=0&hin=0&hou=0&out=0&xta=15&end=14.9995&fin=0&fou=-0.0005000000000006111"
+            "&sta=0&int=0&pin=0&pou=0&hin=0&hou=0&out=0&xta=15&end=14.9995&fin=0&fou=-0.000500000000000611"
         );
+    }
+
+    #[test]
+    fn format_f64_matches_dotnet_g15() {
+        // .NET Framework Double.ToString() = G15: whole numbers lose the
+        // fraction, trailing zeros are dropped, 15 significant digits max.
+        assert_eq!(format_f64(0.0), "0");
+        assert_eq!(format_f64(15.0), "15");
+        assert_eq!(format_f64(50.0 - 45.0), "5");
+        assert_eq!(format_f64(1.2), "1.2");
+        assert_eq!(format_f64(8.0001), "8.0001");
+        // Subtraction noise rounds at the 15th significant digit.
+        assert_eq!(format_f64(14.9995 - 15.0), "-0.000500000000000611");
+        // Plain decimal down to 1e-4, scientific at 1e-5 and 1e15.
+        assert_eq!(format_f64(0.0000226757369614512), "2.26757369614512E-05");
+        assert_eq!(format_f64(0.0005), "0.0005");
+        assert_eq!(format_f64(1e15), "1E+15");
+        assert_eq!(format_f64(999999999999999.0), "999999999999999");
     }
 }
