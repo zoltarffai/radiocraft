@@ -27,14 +27,17 @@ pub fn spawn_pump(app: Arc<App>) -> tokio::task::JoinHandle<()> {
         // Plugin state-change fan-out: remember what sounded last tick.
         let mut prev_main: Option<NowPlaying> = None;
         let mut prev_cart: Option<CartNow> = None;
+        let mut prev_instant: Option<CartNow> = None;
         let mut last_timer = Instant::now();
         loop {
             ticker.tick().await;
             drain_events(&app).await;
+            app.check_duck_expiry();
             fan_state_changes(
                 &app,
                 &mut prev_main,
                 &mut prev_cart,
+                &mut prev_instant,
                 &mut last_timer,
             );
             if app.autodj_enabled()
@@ -66,6 +69,7 @@ fn fan_state_changes(
     app: &Arc<App>,
     prev_main: &mut Option<NowPlaying>,
     prev_cart: &mut Option<CartNow>,
+    prev_instant: &mut Option<CartNow>,
     last_timer: &mut Instant,
 ) {
     if app.plugin_manager().is_none() {
@@ -100,6 +104,25 @@ fn fan_state_changes(
         }
         *prev_cart = cur_cart;
     }
+    // Instant/cart wall (Plugin_InstantPlayers): same state-change names but
+    // the payload marks the source, since instant button ids live in their
+    // own space (`weborama.ID`) and would otherwise collide with carts.
+    let cur_instant = app.instant_now();
+    if cur_instant.as_ref().map(|c| c.button_id) != prev_instant.as_ref().map(|c| c.button_id) {
+        if let Some(old) = prev_instant.take() {
+            app.notify_plugins(StateInfo::with_data(
+                StateChange::CartEnded,
+                serde_json::json!({ "id": old.button_id, "plugin": true }),
+            ));
+        }
+        if let Some(cur) = &cur_instant {
+            app.notify_plugins(StateInfo::with_data(
+                StateChange::CartStarted,
+                serde_json::json!({ "id": cur.button_id, "plugin": true }),
+            ));
+        }
+        *prev_instant = cur_instant;
+    }
     if last_timer.elapsed() >= PLUGIN_TIMER {
         *last_timer = Instant::now();
         app.notify_plugins(StateInfo::new(StateChange::Timer));
@@ -114,6 +137,7 @@ async fn drain_events(app: &Arc<App>) {
             PlayerEvent::Finished | PlayerEvent::SegueStarted => match zone {
                 Zone::Main => app.refresh_now_playing().await,
                 Zone::Cart => app.refresh_cart_now(),
+                Zone::Instant => app.refresh_instant_now(),
                 _ => {}
             },
         }
@@ -122,6 +146,7 @@ async fn drain_events(app: &Arc<App>) {
     // VDF target, stop_at); keep `now` honest either way.
     app.refresh_now_playing().await;
     app.refresh_cart_now();
+    app.refresh_instant_now();
 }
 
 #[cfg(test)]

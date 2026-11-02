@@ -137,6 +137,8 @@ pub enum Frame {
         zones: Vec<ZoneState>,
         /// Active cartwall button, when a cart is rolled.
         cart: Option<CartNowInfo>,
+        /// Active instant/cart wall button (`Plugin_InstantPlayers`).
+        instant: Option<CartNowInfo>,
     },
     /// Master meters + live positions, pushed at 20 Hz.
     Meters {

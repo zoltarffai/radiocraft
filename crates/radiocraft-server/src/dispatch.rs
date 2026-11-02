@@ -44,6 +44,7 @@ async fn run(app: &Arc<App>, op: &str, args: &Value) -> Result<Value> {
         "play" => start(app, args, false).await,
         "cue" => start(app, args, true).await,
         "play_cart" => play_cart(app, args).await,
+        "play_instant" => play_instant(app, args).await,
         "segue_now" => {
             let zone = arg_zone(args)?;
             app.engine.segue_now(zone, arg_i32(args, "fade", -1))?;
@@ -52,13 +53,19 @@ async fn run(app: &Arc<App>, op: &str, args: &Value) -> Result<Value> {
         "stop" => {
             let zone = arg_zone(args)?;
             app.engine.stop(zone, arg_i32(args, "fade", -1));
-            if matches!(zone, Zone::Cart) {
-                app.clear_cart_now();
+            match zone {
+                Zone::Cart => app.clear_cart_now(),
+                Zone::Instant => {
+                    app.clear_instant_now();
+                    app.release_program_duck();
+                }
+                _ => {}
             }
             Ok(json!({}))
         }
         "stop_all" => {
             app.engine.stop_all(arg_i32(args, "fade", -1));
+            app.release_program_duck();
             Ok(json!({}))
         }
         "stop_at" => {
@@ -819,8 +826,83 @@ async fn play_cart(app: &Arc<App>, args: &Value) -> Result<Value> {
         title: song.title.clone(),
     };
     app.set_cart_now(cart.clone());
+    // RadioDJ's sweeper button ducks the main program for the track length
+    // (`ReduceVolumeForSeconds(duration, true, -10f)`).
+    app.apply_program_duck((duration * 1000.0).max(0.0) as i64);
     Ok(json!({
         "cart": cart.info(),
+        "historyId": history_id,
+        "duration_secs": duration,
+    }))
+}
+
+/// Play (or stop) the track behind an instant/cart wall button, mirroring
+/// `Plugin_InstantPlayers.CartControl.ButtonClick` +
+/// `CartButtonControl.set_PlayCart`: the linked `songs` row rolls on the
+/// dedicated instant zone (own pause/seek controls, main program ducked for
+/// the track length), history is booked at start, and the rolled button
+/// toggles off with the configured `StopFadeDuration` fade. Buttons resolve
+/// through the shared `carts`/`carts_list` pair like cartwalls do.
+async fn play_instant(app: &Arc<App>, args: &Value) -> Result<Value> {
+    let db = app.require_db().await?;
+    let button = if let Some(button_id) = args.get("buttonId").and_then(Value::as_u64) {
+        radiocraft_db::entities::cart_button_by_id(db.pool(), button_id as u32).await?
+    } else if let Some(cart_id) = args.get("cartId").and_then(Value::as_u64) {
+        let number = arg_u32(args, "number")?;
+        radiocraft_db::entities::cart_button_by_number(db.pool(), cart_id as u32, number).await?
+    } else {
+        return Err(anyhow!("play_instant needs a 'buttonId', or a 'cartId' + 'number'"));
+    }
+    .ok_or_else(|| anyhow!("no such instant button"))?;
+
+    // Toggle: pressing the rolled button stops the insert with a fade.
+    if app.instant_now().is_some_and(|c| c.button_id == button.ID)
+        && app.engine.is_playing(Zone::Instant)
+    {
+        let fade = {
+            let cfg = app.cartwall.read().expect("cartwall lock");
+            (cfg.stop_fade_secs.max(0) as i64) * 1000
+        };
+        app.engine.stop(Zone::Instant, fade as i32);
+        app.clear_instant_now();
+        app.release_program_duck();
+        return Ok(json!({ "stopped": true, "buttonId": button.ID }));
+    }
+
+    let song = radiocraft_db::entities::song_by_id(db.pool(), button.swID)
+        .await?
+        .ok_or_else(|| {
+            anyhow!("instant button {} links to missing song {}", button.swButton, button.swID)
+        })?;
+    let path = PathBuf::from(&song.path);
+    if !path.exists() {
+        return Err(anyhow!("no such file: {}", song.path));
+    }
+
+    // History is booked at play start, like cart buttons do.
+    let history_id = radiocraft_db::entities::add_history_row(
+        db.pool(),
+        song.ID,
+        i32::from(song.song_type),
+        &song.artist,
+        &song.title,
+    )
+    .await?;
+
+    let knobs = knobs_from_song(&song);
+    let (req, duration) = request_for_file(&path, &knobs)?;
+    app.engine
+        .play(Zone::Instant, req, i32::from(song.song_type), song.overlay)?;
+    let instant = crate::state::CartNow {
+        button_id: button.ID,
+        cart_id: button.pID,
+        song_id: i64::from(song.ID),
+        title: song.title.clone(),
+    };
+    app.set_instant_now(instant.clone());
+    app.apply_program_duck((duration * 1000.0).max(0.0) as i64);
+    Ok(json!({
+        "instant": instant.info(),
         "historyId": history_id,
         "duration_secs": duration,
     }))

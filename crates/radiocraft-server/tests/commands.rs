@@ -408,6 +408,122 @@ async fn live_cart_play() {
     let _ = std::fs::remove_file(&file);
 }
 
+/// Instant/cart wall play parity (`Plugin_InstantPlayers`): `play_instant`
+/// rolls the linked song on the dedicated instant zone, books history at
+/// start, carries the rolled button in the player frame's `instant` slot,
+/// toggles off on a second press, and clears on a transport stop.
+#[tokio::test]
+async fn live_instant_play() {
+    let app = tmp_app();
+    let _live = live_guard().lock().await;
+    if !connect_live(&app).await {
+        return;
+    }
+
+    let dsn_raw = std::env::var("RC_DB_TEST_DSN").unwrap();
+    let scrub = radiocraft_db::Db::connect_url(&dsn_raw).await.expect("scrub conn");
+    for sql in [
+        "DELETE FROM songs WHERE path LIKE '/tmp/opencode/smoke-audio/instant-%'",
+        "DELETE FROM carts WHERE name = 'Parity Instant'",
+    ] {
+        sqlx::raw_sql(sql).execute(scrub.pool()).await.expect("scrub");
+    }
+    scrub.close().await;
+
+    let src = std::env::var("RC_TEST_AUDIO").unwrap_or_else(|_| "/tmp/opencode/smoke-audio/testtone.wav".into());
+    if !std::path::Path::new(&src).exists() {
+        eprintln!("skipping live-db test: test audio file {src} missing");
+        return;
+    }
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let file = format!("/tmp/opencode/smoke-audio/instant-{nanos}.wav");
+    std::fs::copy(&src, &file).expect("copy tone");
+    let data = result_of(call(&app, "library_add", json!({"path": file})).await);
+    let song_id = data["songId"].as_u64().expect("songId");
+
+    let db = app.require_db().await.expect("db");
+    let cart_id = radiocraft_db::entities::insert_cart(db.pool(), "Parity Instant")
+        .await
+        .expect("insert cart");
+    let mut conn = db.pool().acquire().await.expect("acquire");
+    sqlx::query("INSERT INTO carts_list (pID, swID, swButton, color) VALUES (?, ?, 9, '#ff0000')")
+        .bind(cart_id)
+        .bind(song_id)
+        .execute(&mut *conn)
+        .await
+        .expect("insert instant button");
+    let button_id: i64 = sqlx::query_scalar("SELECT CAST(LAST_INSERT_ID() AS SIGNED)")
+        .fetch_one(&mut *conn)
+        .await
+        .expect("button id");
+    let button_id = button_id as u64;
+    drop(conn);
+    drop(db);
+
+    // Arg validation.
+    let msg = error_of(call(&app, "play_instant", json!({})).await);
+    assert!(msg.contains("buttonId"), "{msg}");
+    let msg = error_of(call(&app, "play_instant", json!({"buttonId": 999_999_999})).await);
+    assert!(msg.contains("no such instant button"), "{msg}");
+
+    // Press: rolls on the instant zone + books history immediately.
+    let data = result_of(call(&app, "play_instant", json!({"buttonId": button_id})).await);
+    assert_eq!(data["instant"]["button_id"], json!(button_id));
+    assert_eq!(data["instant"]["song_id"], json!(song_id));
+    assert_eq!(data["instant"]["cart_id"], json!(cart_id));
+    assert!(data["historyId"].as_u64().expect("historyId") > 0, "{data}");
+    let history_id = data["historyId"].as_u64().unwrap();
+
+    // The player frame carries the rolled button in its own `instant` slot,
+    // separate from the cart highlight.
+    let frame = {
+        let mut rx = app.tx.subscribe();
+        app.tx.send(app.player_frame()).expect("frame");
+        rx.recv().await.expect("frame recv")
+    };
+    match frame {
+        Frame::Player { cart, instant, .. } => {
+            assert!(cart.is_none(), "instant play must not touch the cart slot");
+            let instant = instant.expect("active instant button in player frame");
+            assert_eq!(instant.button_id, button_id as u32);
+        }
+        other => panic!("expected player frame, got {other:?}"),
+    }
+
+    // Pressing the rolled button again stops it (toggle).
+    let data = result_of(call(&app, "play_instant", json!({"buttonId": button_id})).await);
+    assert_eq!(data["stopped"], json!(true), "{data}");
+
+    // By wall + slot number, then stopped via the transport on the instant zone.
+    let data = result_of(call(&app, "play_instant", json!({"cartId": cart_id, "number": 9})).await);
+    assert_eq!(data["instant"]["button_id"], json!(button_id));
+    let data = result_of(call(&app, "stop", json!({"zone": "instant"})).await);
+    assert_eq!(data, json!({}));
+    let frame = {
+        let mut rx = app.tx.subscribe();
+        app.tx.send(app.player_frame()).expect("frame");
+        rx.recv().await.expect("frame recv")
+    };
+    match frame {
+        Frame::Player { instant, .. } => assert!(instant.is_none(), "wall highlight must clear"),
+        other => panic!("expected player frame, got {other:?}"),
+    }
+
+    // Cleanup.
+    let db = app.require_db().await.expect("db");
+    radiocraft_db::entities::delete_cart(db.pool(), cart_id as u32)
+        .await
+        .expect("delete cart");
+    let data = result_of(call(&app, "history_delete", json!({"historyId": history_id})).await);
+    assert_eq!(data["removed"], json!(1));
+    let data = result_of(call(&app, "library_delete", json!({"songId": song_id})).await);
+    assert_eq!(data["removed"], json!(1));
+    let _ = std::fs::remove_file(&file);
+}
+
 /// Full AutoDJ path against the live database: rotation + criteria rows
 /// drive the query, the plan reports the pick, and `autodj_play_next`
 /// rolls it through the normal play path.

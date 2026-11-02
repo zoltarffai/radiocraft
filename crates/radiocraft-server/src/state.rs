@@ -214,6 +214,12 @@ pub struct App {
     /// Cartwall button currently rolled on the cart zone (RadioDJ's
     /// `CartStarted` equivalent); the cart zone never touches `now`.
     cart_now: std::sync::RwLock<Option<CartNow>>,
+    /// Instant/cart wall button rolled on the instant zone
+    /// (`Plugin_InstantPlayers`); same shape, separate button id space.
+    instant_now: std::sync::RwLock<Option<CartNow>>,
+    /// Deadline for the temporary program duck applied while a cart or
+    /// instant insert plays (RadioDJ's `ReduceVolumeForSeconds`).
+    duck_until: std::sync::Mutex<Option<Instant>>,
     /// AutoDJ switch/tuning (mirrors `AutoDJStart` in the old app).
     autodj: AutodjState,
     pub status: RwLock<Status>,
@@ -327,6 +333,8 @@ impl App {
             db_cfg: RwLock::new(db_config_from(&database)),
             now: std::sync::RwLock::new(None),
             cart_now: std::sync::RwLock::new(None),
+            instant_now: std::sync::RwLock::new(None),
+            duck_until: std::sync::Mutex::new(None),
             autodj,
             status: RwLock::new(Status::info("Not connected to the database")),
             tx,
@@ -625,6 +633,81 @@ impl App {
         }
     }
 
+    // ---- instant zone --------------------------------------------------------
+
+    /// The active instant/cart wall button, if any.
+    pub fn instant_now(&self) -> Option<CartNow> {
+        self.instant_now.read().expect("instant now lock").clone()
+    }
+
+    /// Roll an instant button (replacing any previous one) and push the frame.
+    pub fn set_instant_now(&self, instant: CartNow) {
+        *self.instant_now.write().expect("instant now lock") = Some(instant);
+        let _ = self.tx.send(self.player_frame());
+    }
+
+    /// Clear the active instant button (stop/replacement) and push the frame.
+    pub fn clear_instant_now(&self) {
+        if self.instant_now.write().expect("instant now lock").take().is_some() {
+            let _ = self.tx.send(self.player_frame());
+        }
+    }
+
+    /// If the rolled instant insert no longer sounds (natural end or manual
+    /// stop), clear the wall highlight.
+    pub fn refresh_instant_now(&self) {
+        let stale = {
+            let cur = self.instant_now.read().expect("instant now lock");
+            cur.is_some() && !self.engine.is_playing(Zone::Instant)
+        };
+        if stale {
+            self.clear_instant_now();
+        }
+    }
+
+    // ---- program ducking ------------------------------------------------------
+
+    /// Duck the main program for `duration_ms` while a cart/instant insert
+    /// plays (RadioDJ's `NowPlaying.ReduceVolumeForSeconds(duration, true,
+    /// -10f)`): `vol_onsweeper` when it is already a negative level, the
+    /// plugin's -10 dB reduction otherwise.
+    pub fn apply_program_duck(&self, duration_ms: i64) {
+        let base = {
+            let g = self.general.read().expect("general lock");
+            engine_config(&g).duck_db
+        };
+        let duck = if base < 0.0 { base } else { -10.0 };
+        self.engine.set_duck_db(duck);
+        let until = Instant::now()
+            + std::time::Duration::from_millis(duration_ms.max(0) as u64);
+        *self.duck_until.lock().expect("duck lock") = Some(until);
+    }
+
+    /// Restore the configured program level after an insert (manual stops
+    /// and early ends call this; natural ends reach `check_duck_expiry`).
+    pub fn release_program_duck(&self) {
+        if self.duck_until.lock().expect("duck lock").take().is_none() {
+            return;
+        }
+        let base = {
+            let g = self.general.read().expect("general lock");
+            engine_config(&g).duck_db
+        };
+        self.engine.set_duck_db(base);
+    }
+
+    /// Pump hook: drop the temporary duck once its duration has elapsed.
+    pub fn check_duck_expiry(&self) {
+        let expired = self
+            .duck_until
+            .lock()
+            .expect("duck lock")
+            .is_some_and(|until| until <= Instant::now());
+        if expired {
+            self.release_program_duck();
+        }
+    }
+
     // ---- frames -------------------------------------------------------------
 
     /// The transport/now-playing snapshot frame.
@@ -639,6 +722,7 @@ impl App {
             now,
             zones: self.zone_states(),
             cart: self.cart_now().map(|c| c.info()),
+            instant: self.instant_now().map(|c| c.info()),
         }
     }
 
