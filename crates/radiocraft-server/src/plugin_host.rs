@@ -276,7 +276,6 @@ struct PluginEntry {
 /// Owns the plugin dispatcher thread and its registry. Cheap to clone the
 /// `Arc`; control calls block on the plugin thread.
 pub struct PluginManager {
-    app: Arc<App>,
     ctl: mpsc::UnboundedSender<PluginCtl>,
     entries: std::sync::Mutex<Vec<PluginEntry>>,
     join: std::sync::Mutex<Option<std::thread::JoinHandle<()>>>,
@@ -287,12 +286,10 @@ impl PluginManager {
     pub fn start(app: Arc<App>) -> Arc<Self> {
         let (ctl, rx) = mpsc::unbounded_channel();
         let mgr = Arc::new(Self {
-            app: app.clone(),
             ctl: ctl.clone(),
             entries: std::sync::Mutex::new(Vec::new()),
             join: std::sync::Mutex::new(None),
         });
-        let mgr2 = mgr.clone();
         let thread_mgr = mgr.clone();
         let outer_rt = tokio::runtime::Handle::try_current().ok();
         let handle = std::thread::Builder::new()
@@ -300,25 +297,8 @@ impl PluginManager {
             .spawn(move || plugin_thread(app, thread_mgr, outer_rt, rx))
             .expect("spawn plugin thread");
         *mgr.join.lock().expect("join lock") = Some(handle);
-        // Load whatever sits in the Plugins folder on boot.
-        let dir = mgr2.app.config_dir.join("Plugins");
-        if dir.is_dir() {
-            if let Ok(rd) = std::fs::read_dir(&dir) {
-                for ent in rd.flatten() {
-                    let p = ent.path();
-                    let is_lib = p
-                        .extension()
-                        .map(|e| e == "so" || e == "dll" || e == "dylib")
-                        .unwrap_or(false);
-                    if is_lib {
-                        match mgr2.load(p) {
-                            Ok(id) => info!("plugin loaded (id {id})"),
-                            Err(e) => warn!("plugin load failed: {e}"),
-                        }
-                    }
-                }
-            }
-        }
+        // The boot scan of config_dir/Plugins runs on the plugin thread
+        // itself (see `plugin_thread`), so this never blocks a runtime.
         mgr
     }
 
@@ -394,41 +374,31 @@ fn plugin_thread(
 ) {
     let mut registry = PluginRegistry::new();
 
+    // Load whatever sits in the Plugins folder on boot. This runs on the
+    // plugin thread itself: no channel round-trip, and the caller's tokio
+    // runtime is never blocked by the scan.
+    let dir = app.config_dir.join("Plugins");
+    if let Ok(rd) = std::fs::read_dir(&dir) {
+        for ent in rd.flatten() {
+            let p = ent.path();
+            let is_lib = p
+                .extension()
+                .map(|e| e == "so" || e == "dll" || e == "dylib")
+                .unwrap_or(false);
+            if is_lib {
+                if let Err(e) = load_into_registry(&mut registry, &app, &mgr, &outer_rt, &p) {
+                    warn!("plugin load failed: {e}");
+                }
+            }
+        }
+    }
+
     while let Some(msg) = rx.blocking_recv() {
         match msg {
             PluginCtl::Load { path, reply } => {
-                let outcome = (|| -> Result<u64, String> {
-                    // Safety: the ABI gate inside `load_plugin` validates the
-                    // exported symbols before any call; see loader docs.
-                    let mut loaded = unsafe { load_plugin(&path) }
-                        .map_err(|e| format!("loading {}: {e}", path.display()))?;
-                    let info = loaded.info();
-                    // Init with the server host shim. The shim is leaked:
-                    // it must outlive every call the plugin makes from any
-                    // thread (same policy as the original app, which never
-                    // released its `IHost*`). `NativePlugin::init` builds the
-                    // host vtable around this reference itself.
-                    let shim: &'static ServerHost = Box::leak(Box::new(ServerHost::new(
-                        app.clone(),
-                        info.name.clone(),
-                        outer_rt.clone(),
-                    )));
-                    loaded.init(shim);
-                    let actions = loaded.actions();
-                    let id = registry.register(Box::new(loaded));
-                    shim.set_plugin_id(id);
-                    let entry = PluginEntry {
-                        id,
-                        name: info.name.clone(),
-                        version: info.version,
-                        description: info.description,
-                        path: Some(path.display().to_string()),
-                        actions: actions.iter().map(|a| a.display_string()).collect(),
-                    };
-                    info!("plugin `{}` loaded (id {id})", info.name);
-                    mgr.entries.lock().expect("entries lock").push(entry);
-                    Ok(id)
-                })();
+                let outcome =
+                    load_into_registry(&mut registry, &app, &mgr, &outer_rt, &path)
+                        .map_err(|e| format!("loading {}: {e}", path.display()));
                 let _ = reply.send(outcome);
             }
             PluginCtl::Unload { id, reply } => {
@@ -454,6 +424,46 @@ fn plugin_thread(
         }
     }
     info!("plugin dispatcher thread stopped");
+}
+
+/// Load one cdylib into the registry and mirror its metadata for `list()`.
+/// Only ever called on the plugin thread, so the registry needs no lock.
+fn load_into_registry(
+    registry: &mut PluginRegistry,
+    app: &Arc<App>,
+    mgr: &Arc<PluginManager>,
+    outer_rt: &Option<tokio::runtime::Handle>,
+    path: &std::path::Path,
+) -> Result<u64, String> {
+    // Safety: the ABI gate inside `load_plugin` validates the
+    // exported symbols before any call; see loader docs.
+    let mut loaded = unsafe { load_plugin(path) }.map_err(|e| e.to_string())?;
+    let info = loaded.info();
+    // Init with the server host shim. The shim is leaked:
+    // it must outlive every call the plugin makes from any
+    // thread (same policy as the original app, which never
+    // released its `IHost*`). `NativePlugin::init` builds the
+    // host vtable around this reference itself.
+    let shim: &'static ServerHost = Box::leak(Box::new(ServerHost::new(
+        app.clone(),
+        info.name.clone(),
+        outer_rt.clone(),
+    )));
+    loaded.init(shim);
+    let actions = loaded.actions();
+    let id = registry.register(Box::new(loaded));
+    shim.set_plugin_id(id);
+    let entry = PluginEntry {
+        id,
+        name: info.name.clone(),
+        version: info.version,
+        description: info.description,
+        path: Some(path.display().to_string()),
+        actions: actions.iter().map(|a| a.display_string()).collect(),
+    };
+    info!("plugin `{}` loaded (id {id})", info.name);
+    mgr.entries.lock().expect("entries lock").push(entry);
+    Ok(id)
 }
 
 /// The host shim handed to each plugin on its thread.
