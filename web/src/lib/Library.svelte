@@ -22,9 +22,29 @@
 
   // Track analyzer (Plugin_TracksManager): dB thresholds + busy flag.
   let analyzing = $state(false);
+  let analyzeReport = $state<AnalyzeReport | null>(null);
   let anDbIn = $state(-24);
   let anDbNext = $state(-5);
   let anDbOut = $state(-30);
+
+  type AnalyzeReport = {
+    analyzed: number;
+    skipped: number;
+    total: number;
+    errors: string[];
+    status: string;
+  };
+
+  // The sweep is a server background job: the cmd reply only confirms start,
+  // the completion report arrives as a broadcast (id 0) result frame.
+  $effect(() => {
+    const off = session.onBroadcast("analyze_tracks", (data) => {
+      analyzing = false;
+      analyzeReport = data as unknown as AnalyzeReport;
+      void search(false);
+    });
+    return off;
+  });
 
   const songs = $derived(session.songs);
   const total = $derived(session.libraryTotal);
@@ -135,17 +155,17 @@
     const scope = ids.length > 0 ? `${ids.length} selected track(s)` : "the entire library";
     if (!window.confirm(`Re-analyze cue points for ${scope}? Stored cue positions are overwritten.`)) return;
     analyzing = true;
+    analyzeReport = null;
     try {
+      // Reply only acknowledges the sweep started; the report lands via onBroadcast.
       await session.cmd("analyze_tracks", {
         ...(ids.length > 0 ? { songIds: ids } : {}),
         dbIn: anDbIn,
         dbNext: anDbNext,
         dbEnd: anDbOut,
       });
-      await search(false);
     } catch (e) {
       session.lastError = String(e);
-    } finally {
       analyzing = false;
     }
   }
@@ -269,7 +289,17 @@
     <button title="Detect cue in / next / out (with selection: selected rows only)" disabled={!ready || analyzing} onclick={() => void analyzeTracks()}>
       {analyzing ? "Analyzing…" : "Analyze"}
     </button>
-    <span class="dim">level thresholds (defaults -24 / -5 / -30)</span>
+    {#if analyzing}
+      <span class="progress">{session.status.message}</span>
+    {:else if analyzeReport}
+      <span class="progress" title={analyzeReport.errors.join("\n")}>
+        {analyzeReport.analyzed} analyzed, {analyzeReport.skipped} skipped
+        {#if analyzeReport.errors.length > 0}(⚠ {analyzeReport.errors.length}){/if}
+      </span>
+      <button class="link" onclick={() => (analyzeReport = null)}>dismiss</button>
+    {:else}
+      <span class="dim">level thresholds (defaults -24 / -5 / -30)</span>
+    {/if}
   </div>
 
   {#if editing}
@@ -371,6 +401,20 @@
 
   .analyze input {
     width: 7ch;
+  }
+  .analyze .progress {
+    color: var(--accent, #7aa2f7);
+    max-width: 46ch;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  button.link {
+    background: none;
+    border: none;
+    color: var(--muted, #9aa0ab);
+    padding: 0 4px;
+    text-decoration: underline;
   }
 
   .editform {

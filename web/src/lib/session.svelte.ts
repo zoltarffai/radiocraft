@@ -47,6 +47,8 @@ type Pending = {
   reject: (err: Error) => void;
 };
 
+type BroadcastHandler = (data: Record<string, unknown>) => void;
+
 const RECONNECT_MS = 2500;
 const PING_MS = 25_000;
 
@@ -56,6 +58,8 @@ class Session {
   private ws: WebSocket | null = null;
   private nextId = 1;
   private pending = new Map<number, Pending>();
+  /** Handlers for broadcast results (id 0) from background jobs, by op. */
+  private broadcasts = new Map<string, Set<BroadcastHandler>>();
   private pingTimer: number | null = null;
   private retryTimer: number | null = null;
   private wantOpen = false;
@@ -193,6 +197,15 @@ class Session {
       });
       this.send({ t: "cmd", id, op, args });
     });
+  }
+
+  /** Subscribe to broadcast `result` frames (id 0) from background jobs,
+   * e.g. the analyze sweep's completion report. Returns an unsubscribe fn. */
+  onBroadcast(op: string, handler: BroadcastHandler): () => void {
+    let set = this.broadcasts.get(op);
+    if (!set) this.broadcasts.set(op, (set = new Set()));
+    set.add(handler);
+    return () => set.delete(handler);
   }
 
   // ---- transport shortcuts (dispatch.rs op names) -------------------------
@@ -570,6 +583,12 @@ class Session {
           this.pending.delete(f.id);
           const { t: _t, id: _id, op: _op, ...data } = f as Record<string, unknown>;
           p.resolve(data);
+        } else if (f.id === 0 && f.op && f.op !== "sub") {
+          // Broadcast result from a background job (analyze sweep completion).
+          this.broadcasts.get(f.op)?.forEach((h) => {
+            const { t: _t, id: _id, op: _op, ...data } = f as Record<string, unknown>;
+            h(data);
+          });
         } else if (f.op === "sub") {
           // Snapshot frames pushed right after subscribing (player/state/status).
           const data = f as unknown as {
