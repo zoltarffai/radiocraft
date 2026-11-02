@@ -235,7 +235,7 @@ pub fn build_cue_times(t: &CueTokens) -> String {
 /// unless the exponent is < -5 or >= 15 (then `d.dddE±NN`). So the
 /// `end - next` subtraction noise prints as `-0.000500000000000611`,
 /// not Rust's shortest-round-trip `-0.0005000000000006111`.
-fn format_f64(v: f64) -> String {
+pub(crate) fn format_f64(v: f64) -> String {
     if !v.is_finite() {
         return v.to_string();
     }

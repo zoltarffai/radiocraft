@@ -1287,8 +1287,11 @@ fn library_filter_args(args: &Value) -> LibraryFilter {
 fn decimal_from_f64(v: f64) -> Decimal {
     use std::str::FromStr as _;
     let v = v.max(0.0);
-    // round-trip through the shortest string form to avoid binary noise
-    Decimal::from_str(&format!("{v:.3}")).unwrap_or(Decimal::ZERO)
+    // RadioDJ assigns durations through `new decimal(double)`, which is the
+    // 15-significant-digit G15 form; the DECIMAL(11,5) column then rounds to
+    // 5 places. Matching that keeps e.g. 6.99984073638916 -> 6.99984 instead
+    // of pre-rounding to 3 places (which would give 7.00000).
+    Decimal::from_str(&crate::playback::format_f64(v)).unwrap_or(Decimal::ZERO)
 }
 
 // ---- booking -------------------------------------------------------------------
@@ -1371,6 +1374,17 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn decimal_from_f64_keeps_five_place_durations() {
+        // A sweep computes duration = cue_next - cue_start in f64. Storage must
+        // keep G15 precision so the DECIMAL(11,5) column rounds to 6.99984;
+        // the old 3-place pre-round turned it into 7.00000.
+        assert_eq!(decimal_from_f64(6.99984073638916), "6.99984073638916".parse::<Decimal>().unwrap());
+        assert_eq!(decimal_from_f64(-1.0), Decimal::ZERO);
+        // Round-trips through scientific notation too (tiny durations).
+        assert_eq!(decimal_from_f64(0.0000226757369614512), "0.0000226757369614512".parse::<Decimal>().unwrap());
+    }
 
     fn tmp_app() -> Arc<App> {
         let nanos = std::time::SystemTime::now()
