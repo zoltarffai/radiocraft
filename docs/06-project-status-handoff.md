@@ -316,8 +316,15 @@ thread stopped".
 
 Still open:
 
-1. Cosmetic: on shell exit two benign GTK teardown warnings (appindicator known quirk) +
-   libayatana deprecation warning — harmless.
+1. ~~Cosmetic: on shell exit two benign GTK teardown warnings (appindicator known quirk) +
+   libayatana deprecation warning — harmless.~~ Closed: `quiet_gtk_stack_noise()` in
+   `crates/radiocraft-window/src/main.rs` installs a global GLib log writer func
+   (`glib::log_set_writer_func`) that routes the noisy GTK/GDK/GObject/appindicator
+   domains to `tracing` at debug level (`target: "gtk"`, visible with `RUST_LOG=debug`)
+   and delegates everything else to `glib::log_writer_default`. Note: GLib's own records
+   name the domain field `GLIB_DOMAIN`, not `DOMAIN` — matching only `DOMAIN` silently
+   matches nothing. Verified live on the host X session: stderr is now completely clean
+   at startup and on window close, exit stays clean, clippy clean.
 
 Packaging for the shell is now closed (`80ff7a2`): `scripts/package-linux.sh` builds
 `RadioCraft_0.2.0_amd64.deb` + `RadioCraft-0.2.0-1.x86_64.rpm` in the `localhost/rc-tauri`

@@ -2,6 +2,7 @@ target/
 out/
 dist/
 !crates/radiocraft-window/dist/
+crates/radiocraft-window/gen/
 *.err
 analysis/decompiled-csharp/**/*.csproj
 analysis/decompiled-csharp/**/app.ico

@@ -17,3 +17,8 @@ tracing.workspace = true
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tauri = { version = "2", features = ["tray-icon"] }
 libc = "0.2"
+
+# Same version tauri pulls in (Cargo.lock); used to install glib log handlers.
+# The GTK/WebKit stack only exists on Linux, so this dependency does too.
+[target.'cfg(target_os = "linux")'.dependencies]
+glib = "0.18"

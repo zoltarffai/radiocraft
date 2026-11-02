@@ -23,6 +23,62 @@ use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder, WindowEvent};
 /// Default loopback server address when the shell owns the server.
 const DEFAULT_URL: &str = "http://127.0.0.1:8030/";
 
+/// GLib log domains from the GTK/WebKit/appindicator C stack that emit
+/// well-known cosmetic chatter at startup and window teardown (appindicator
+/// deprecation nag, `GdkWindow ... unexpectedly destroyed` and the frame
+/// clock/pointer assertions that follow it when WebKitGTK destroys the native
+/// window before GTK notices, session-bus/at-spi noise on lean sessions).
+/// These come from C code through GLib's log system, not from our Rust code,
+/// so they bypass `tracing` and land straight on stderr. We install a global
+/// GLib log *writer* for exactly these domains: their messages are captured
+/// at `debug` level instead of hitting the terminal, and everything else
+/// (including real GLib errors from other domains) keeps the default stderr
+/// behaviour. A writer func (rather than per-domain handlers) is required
+/// because parts of GDK log structured GLib records, which skip the classic
+/// handler chain. Set `RUST_LOG=debug` to see the captured messages.
+#[cfg(target_os = "linux")]
+fn quiet_gtk_stack_noise() {
+    const NOISY_DOMAINS: &[&str] = &[
+        "Gtk",
+        "Gdk",
+        "GdkPixbuf",
+        "GLib-GObject",
+        "libayatana-appindicator",
+        "libappindicator",
+        "LIBDBUSMENU-GLIB",
+        "dbind",
+    ];
+    glib::log_set_writer_func(|level, fields| {
+        let field = |key: &str| {
+            fields
+                .iter()
+                .find(|f| f.key() == key)
+                .and_then(|f| f.value_str())
+        };
+        // GLib names the domain field GLIB_DOMAIN for records it builds
+        // internally (which is what GTK/GDK emit); DOMAIN is only used by
+        // callers of g_log_structured() that pass it explicitly.
+        let domain = field("GLIB_DOMAIN").or_else(|| field("DOMAIN"));
+        match domain {
+            Some(domain) if NOISY_DOMAINS.contains(&domain) => {
+                tracing::debug!(
+                    target: "gtk",
+                    domain,
+                    ?level,
+                    message = field("MESSAGE").unwrap_or_default(),
+                    "gtk runtime"
+                );
+                glib::LogWriterOutput::Handled
+            }
+            _ => glib::log_writer_default(level, fields),
+        }
+    });
+}
+
+#[cfg(not(target_os = "linux"))]
+fn quiet_gtk_stack_noise() {}
+
+
 fn main() -> Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(
@@ -30,6 +86,7 @@ fn main() -> Result<()> {
         )
         .with_target(false)
         .init();
+    quiet_gtk_stack_noise();
 
     let mut args = std::env::args().skip(1);
     let mut url = std::env::var("RADIOCRAFT_UI_URL").ok();

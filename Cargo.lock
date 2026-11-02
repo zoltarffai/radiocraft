@@ -3591,6 +3591,7 @@ name = "radiocraft-window"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "glib",
  "libc",
  "radiocraft-net",
  "radiocraft-settings",
