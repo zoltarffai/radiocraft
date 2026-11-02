@@ -11,6 +11,7 @@
   import PlaylistEditor from "./lib/PlaylistEditor.svelte";
   import AutoDJPanel from "./lib/AutoDJPanel.svelte";
   import RotationEditor from "./lib/RotationEditor.svelte";
+  import PluginPanel from "./lib/PluginPanel.svelte";
   import SettingsPanel from "./lib/SettingsPanel.svelte";
 
   onMount(() => {
@@ -48,6 +49,7 @@
     <section class="col wide"><QueuePanel /></section>
     <section class="col wide"><PlaylistEditor /></section>
     <section class="col wide"><RotationEditor /></section>
+    <section class="col wide"><PluginPanel /></section>
     <section class="col wide"><HistoryPanel /></section>
     <section class="col wide"><SettingsPanel /></section>
   </main>
