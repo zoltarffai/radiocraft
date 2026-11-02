@@ -82,6 +82,11 @@ impl StreamResampler {
     }
 
     /// Resample `input` (interleaved, `chans` channels) appending to `out`.
+    /// The input sample rate this resampler was built for.
+    pub fn in_rate(&self) -> usize {
+        self.in_rate as usize
+    }
+
     pub fn push(&mut self, input: &[f32], out: &mut Vec<f32>) {
         let in_frames = input.len() / self.chans;
         let base = self.consumed;

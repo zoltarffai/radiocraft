@@ -12,7 +12,7 @@ use anyhow::Result;
 use rust_decimal::Decimal;
 use serde::Deserialize;
 
-use radiocraft_audio::decoder::{FileSource, Source};
+use radiocraft_audio::decoder::{FileSource, Source, StreamSource};
 use radiocraft_audio::player::PlayRequest;
 use radiocraft_db::entities::{NewSong, Song};
 
@@ -156,12 +156,32 @@ pub fn knobs_from_song(song: &Song) -> CueKnobs {
     parse_cue_times(&song.cue_times)
 }
 
-/// Open a file and build the `PlayRequest` for it (cue plan + loop region).
+/// Open the media for `path` and build the `PlayRequest` for it (cue plan +
+/// loop region). HTTP(S) paths (RadioDJ internet streams, `song_type = 5`)
+/// open through [`StreamSource`]; everything else is a local file.
 ///
 /// Returns the request plus the decoded duration in seconds so callers
-/// can fill in now-playing bookkeeping.
+/// can fill in now-playing bookkeeping (live streams report 0.0).
+///
+/// Blocking: opens the file or fetches the stream's HTTP header; call from
+/// `spawn_blocking` on async contexts.
 pub fn request_for_file(path: &Path, knobs: &CueKnobs) -> Result<(PlayRequest, f64)> {
-    let source = FileSource::open(path)?;
+    request_for_source(&path_string(path), knobs)
+}
+
+/// Same as [`request_for_file`] but keyed by the raw library `path` string,
+/// which is how streams are stored (the URL itself).
+pub fn request_for_source(raw_path: &str, knobs: &CueKnobs) -> Result<(PlayRequest, f64)> {
+    if radiocraft_audio::is_stream_path(raw_path) {
+        let source = StreamSource::open(raw_path)?;
+        let duration = source.duration().map(|d| d.as_secs_f64()).unwrap_or(0.0);
+        let mut req = knobs.plan().apply(PlayRequest::new(Box::new(source)));
+        if knobs.loop_in > 0.0 && knobs.loop_out > knobs.loop_in {
+            req = req.looping(knobs.loop_in, knobs.loop_out);
+        }
+        return Ok((req, duration));
+    }
+    let source = FileSource::open(Path::new(raw_path))?;
     let duration = source
         .duration()
         .map(|d| d.as_secs_f64())
@@ -171,6 +191,12 @@ pub fn request_for_file(path: &Path, knobs: &CueKnobs) -> Result<(PlayRequest, f
         req = req.looping(knobs.loop_in, knobs.loop_out);
     }
     Ok((req, duration))
+}
+
+/// Lossy path-to-string for dispatching file vs. stream; non-UTF-8 paths
+/// (never produced by the library flows) fall back to the debug form.
+fn path_string(path: &Path) -> String {
+    path.to_str().map(str::to_string).unwrap_or_else(|| path.display().to_string())
 }
 
 /// File-name split used for newly added files: `Artist - Title`.

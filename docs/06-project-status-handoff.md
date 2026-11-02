@@ -40,7 +40,8 @@ Everything is committed; working tree clean. All tests green, clippy `-D warning
 for every crate except `radiocraft-window` on the host (see §7 for the exclude rule).
 Post-milestone feature-parity track (all in §5/§8): plugin hosting `eaf8170`+`27e3da6`+
 `577596f`+`77bafdb`, master sound FX `4317b15`, cart wall config/CRUD `281a1bb`,
-instant/cart-wall playback `835a86f`+`1eb2ed4`.
+instant/cart-wall playback `835a86f`+`1eb2ed4`, cart-wall editor (next commit), internet
+streams Type 5 with ICY live titles (see §8).
 
 | v0.2 milestone (docs/05 numbering) | Status | Commit |
 |---|---|---|
@@ -304,9 +305,8 @@ Still open:
    `tauri.conf.json`: targets deb/rpm, identifier `dev.radiocraft.window`).
 2. Cosmetic: on shell exit two benign GTK teardown warnings (appindicator known quirk) +
    libayatana deprecation warning — harmless.
-3. Feature parity gaps: internet streams (song Type 5, ICY/SH metadata, `UseStreamTitle`),
-   auto-fill silence detection (ThresholdStart/Next/End), and the `Plugin_AuxPlayers`
-   contract (extra configurable zones beyond the built-in four).
+3. Feature parity gaps: auto-fill silence detection (ThresholdStart/Next/End), and the
+   `Plugin_AuxPlayers` contract (extra configurable zones beyond the built-in four).
 
 The cart/instant wall editor is now closed: `web/src/lib/CartwallEditor.svelte` mirrors
 RadioDJ's wall configuration window — wall select/New/Rename/Delete, grid config
@@ -316,6 +316,24 @@ highlight from `cartNow`/`instantNow`, and dirty-flag Save/Discard. Selected wal
 hoisted in session state so both wall panels stay in sync. REST round trip verified
 against the running server (create/rename/save_buttons/list/play_cart/play_instant/
 delete + cleanup).
+
+Internet streams (song Type 5) are now closed: `radiocraft-audio::decoder::StreamSource`
+(ureq, `Icy-MetaData: 1`, icy-name/icy-description capture, auto-reconnect pump with
+`ReadOutcome::{Have, Failed}`, unseekable `seek -> Ok(true)`, gzip) plays HTTP(S) URLs in
+any zone. Streams are ordinary `songs` rows with `song_type = 5` and the URL in `path`
+(no separate table — matches RadioDJ); new op `stream_add` inserts one (duration 0,
+dedup via `song_by_path`). Ad-hoc `play {path}` / `queue_add_file` accept http(s) URLs
+(bypass the file-exists check, `track_type = STREAM_TRACK_TYPE`). Streams are endless:
+`duration None` on the player side so no VDF/stop-at plan, program duck skipped for
+infinite duration, and only a never-connecting source reports EOF so AutoDJ takes over.
+Live ICY metadata (`StreamTitle` MP3 tag or `icy-name` fallback) flows through a
+`LiveTitle` shared cell (`Source::live_title` -> `Stream` -> `Player` -> `Engine`), the
+pump polls `poll_stream_title()` and pushes fresh `player` frames, `NowInfo.stream_title`
+carries it (web: `NowPlaying.svelte` shows it in accent colour over the stored row
+title — RadioDJ's `UseStreamTitle` display behaviour). Web: Library "+ Stream" form.
+Note: `Frame::Player.now` is now `Box<Option<NowInfo>>` (clippy `large_enum_variant`);
+JSON shape unchanged. History booking keeps the stored row's artist/title (RadioDJ books
+`curArtist`/`curTitle`, which it only rewrites for its own title overrides).
 
 Deferred fidelity checks (optional): cross-check `LoudnessCalculator.cs`. (Plugin_SoundProcessing
 FX keys/defaults were verified against the decompiles in `4317b15`.)

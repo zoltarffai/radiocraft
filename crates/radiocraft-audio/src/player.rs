@@ -10,7 +10,7 @@ use std::collections::VecDeque;
 use std::time::Duration;
 
 
-use crate::decoder::Source;
+use crate::decoder::{LiveTitle, Source};
 use crate::error::Result;
 use crate::util::clamp_f32;
 
@@ -102,6 +102,8 @@ struct Stream {
     vdf_end: Option<u64>,
     loop_region: Option<(u64, u64)>,
     unseekable: bool,
+    /// Broadcast metadata cell (internet streams); `None` for files.
+    live_title: Option<LiveTitle>,
     scratch: Vec<f32>,
     out: Vec<f32>,
     done: bool,
@@ -113,6 +115,7 @@ impl Stream {
             .source
             .duration()
             .map(|d| (d.as_secs_f64() * rate) as u64);
+        let live_title = req.source.live_title();
         let mut stream = Self {
             source: req.source,
             rate,
@@ -126,6 +129,7 @@ impl Stream {
             vdf_end: None,
             loop_region: None,
             unseekable: false,
+            live_title,
             scratch: Vec::new(),
             out: Vec::new(),
             done: false,
@@ -437,6 +441,16 @@ impl Player {
             .as_ref()
             .and_then(|c| c.duration)
             .map(|f| Duration::from_secs_f64(f as f64 / self.rate))
+    }
+
+    /// Broadcast metadata cell of whatever is (or is about to be) playing
+    /// (internet streams); `None` for files.
+    pub fn live_title(&self) -> Option<LiveTitle> {
+        self.current
+            .as_ref()
+            .or(self.pending.as_ref())
+            .or(self.overlap.as_ref())
+            .and_then(|s| s.live_title.clone())
     }
 
     /// Render one block of `out.len()/2` frames into `out` (overwrites,

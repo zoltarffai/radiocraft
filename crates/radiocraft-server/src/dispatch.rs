@@ -11,13 +11,18 @@ use chrono::{DateTime, Local};
 use rust_decimal::Decimal;
 use serde_json::{Value, json};
 
+use radiocraft_audio::is_stream_path;
 use radiocraft_audio::mixer::Zone;
 use radiocraft_db::booking::{BookingParams, book_track};
 use radiocraft_db::entities::{LibraryFilter, LibrarySort, NewSong};
 
 use crate::frames::Frame;
-use crate::playback::{CueKnobs, knobs_from_song, request_for_file, split_stem};
+use crate::playback::{CueKnobs, knobs_from_song, request_for_file, request_for_source, split_stem};
 use crate::state::{App, NowPlaying, parse_zone, zone_name};
+
+/// `songs.song_type` value marking an internet stream — RadioDJ's
+/// `TrackTypes.InternetStream` enum index.
+pub const STREAM_TRACK_TYPE: i32 = 5;
 
 /// Handle one client command; always replies `result` or `error` with `id`.
 pub async fn dispatch(app: &Arc<App>, id: u64, op: &str, args: &Value) -> Frame {
@@ -247,6 +252,45 @@ async fn run(app: &Arc<App>, op: &str, args: &Value) -> Result<Value> {
             };
             let id = radiocraft_db::entities::insert_song(db.pool(), &song).await?;
             Ok(json!({ "songId": id, "artist": artist, "title": title }))
+        }
+        "stream_add" => {
+            // RadioDJ keeps internet streams as ordinary library rows with
+            // `song_type = TrackTypes.InternetStream` (5) and the URL in
+            // `path`; there is no separate streams table.
+            let db = app.require_db().await?;
+            let url = arg_str(args, "url")?;
+            if !is_stream_path(&url) {
+                return Err(anyhow!("stream url must start with http:// or https://"));
+            }
+            if radiocraft_db::entities::song_by_path(db.pool(), &url).await?.is_some() {
+                return Err(anyhow!("stream already in library: {url}"));
+            }
+            let song = NewSong {
+                path: url.clone(),
+                song_type: STREAM_TRACK_TYPE as i8,
+                id_subcat: args.get("idSubcat").and_then(Value::as_u64).unwrap_or(0) as u32,
+                id_genre: args.get("idGenre").and_then(Value::as_u64).unwrap_or(0) as u32,
+                artist: args
+                    .get("artist")
+                    .and_then(Value::as_str)
+                    .filter(|s| !s.is_empty())
+                    .unwrap_or("")
+                    .to_string(),
+                title: args
+                    .get("title")
+                    .and_then(Value::as_str)
+                    .filter(|s| !s.is_empty())
+                    .unwrap_or(&url)
+                    .to_string(),
+                album: args.get("album").and_then(Value::as_str).unwrap_or("").to_string(),
+                duration: Decimal::ZERO,
+                original_duration: Decimal::ZERO,
+                enabled: true,
+                weight: arg_decimal(args, "weight", Decimal::from(100)),
+                ..NewSong::default()
+            };
+            let id = radiocraft_db::entities::insert_song(db.pool(), &song).await?;
+            Ok(json!({ "songId": id, "path": url }))
         }
         "library_update" => {
             let db = app.require_db().await?;
@@ -506,24 +550,36 @@ async fn run(app: &Arc<App>, op: &str, args: &Value) -> Result<Value> {
         "queue_add_file" => {
             let db = app.require_db().await?;
             let raw = arg_str(args, "path")?;
+            let is_stream = is_stream_path(&raw);
             let path = PathBuf::from(&raw);
-            if !path.exists() {
+            if !is_stream && !path.exists() {
                 return Err(anyhow!("no such file: {raw}"));
             }
             let (duration, song_id) = match radiocraft_db::entities::song_by_path(db.pool(), &raw).await? {
                 Some(s) => (s.duration, 0),
+                None if is_stream => (Decimal::ZERO, 0),
                 None => {
                     let (_, d) = request_for_file(&path, &CueKnobs::default())?;
                     (decimal_from_f64(d), 0)
                 }
             };
-            let (artist, title) = split_stem(&path);
+            let (auto_artist, auto_title) = if is_stream {
+                (String::new(), raw.clone())
+            } else {
+                split_stem(&path)
+            };
+            let artist = args
+                .get("artist")
+                .and_then(Value::as_str)
+                .filter(|s| !s.is_empty())
+                .map(str::to_string)
+                .unwrap_or(auto_artist);
             let title = args
                 .get("title")
                 .and_then(Value::as_str)
                 .filter(|s| !s.is_empty())
                 .map(str::to_string)
-                .unwrap_or(title);
+                .unwrap_or(auto_title);
             let item = radiocraft_db::entities::NewQueueItem {
                 songID: song_id,
                 ETA: Some(Local::now().naive_local()),
@@ -686,12 +742,12 @@ async fn start(app: &Arc<App>, args: &Value, follow: bool) -> Result<Value> {
     let zone = arg_zone(args)?;
     let patch = arg_cues(args);
 
-    let (path, mut playing) = if let Some(song_id) = args.get("songId").and_then(Value::as_i64) {
+    let (raw_path, mut playing) = if let Some(song_id) = args.get("songId").and_then(Value::as_i64) {
         let db = app.require_db().await?;
         let song = radiocraft_db::entities::song_by_id(db.pool(), song_id as u32)
             .await?
             .ok_or_else(|| anyhow!("no song with id {song_id}"))?;
-        let path = PathBuf::from(&song.path);
+        let raw_path = song.path.clone();
         let mut knobs = knobs_from_song(&song);
         if let Some(patch) = &patch {
             knobs = knobs.merge(patch);
@@ -711,38 +767,69 @@ async fn start(app: &Arc<App>, args: &Value, follow: bool) -> Result<Value> {
             fade_in_ms: knobs.fade_in_ms,
             fade_out_ms: knobs.fade_out_ms,
         };
-        (path, playing)
+        (raw_path, playing)
     } else if let Some(raw) = args.get("path").and_then(Value::as_str) {
-        let path = PathBuf::from(raw);
-        if !path.exists() {
-            return Err(anyhow!("no such file: {raw}"));
+        if radiocraft_audio::is_stream_path(raw) {
+            // Ad-hoc stream play (no library row): the title is the URL
+            // unless the caller supplies one.
+            let playing = NowPlaying {
+                song_id: 0,
+                artist: String::new(),
+                title: args
+                    .get("title")
+                    .and_then(Value::as_str)
+                    .filter(|t| !t.is_empty())
+                    .unwrap_or(raw)
+                    .to_string(),
+                album: String::new(),
+                path: raw.to_string(),
+                track_type: STREAM_TRACK_TYPE,
+                duration_secs: 0.0,
+                started_at: Local::now(),
+                cue_start: 0.0,
+                cue_next: 0.0,
+                cue_end: 0.0,
+                fade_in_ms: 0,
+                fade_out_ms: 0,
+            };
+            (raw.to_string(), playing)
+        } else {
+            let path = PathBuf::from(raw);
+            if !path.exists() {
+                return Err(anyhow!("no such file: {raw}"));
+            }
+            let (artist, title) = split_stem(&path);
+            let (artist, title) = match args.get("title").and_then(Value::as_str) {
+                Some(t) => (artist, t.to_string()),
+                None => (artist, title),
+            };
+            let playing = NowPlaying {
+                song_id: 0,
+                artist,
+                title,
+                album: String::new(),
+                path: raw.to_string(),
+                track_type: 0,
+                duration_secs: 0.0,
+                started_at: Local::now(),
+                cue_start: 0.0,
+                cue_next: 0.0,
+                cue_end: 0.0,
+                fade_in_ms: 0,
+                fade_out_ms: 0,
+            };
+            (raw.to_string(), playing)
         }
-        let (artist, title) = split_stem(&path);
-        let (artist, title) = match args.get("title").and_then(Value::as_str) {
-            Some(t) => (artist, t.to_string()),
-            None => (artist, title),
-        };
-        let playing = NowPlaying {
-            song_id: 0,
-            artist,
-            title,
-            album: String::new(),
-            path: raw.to_string(),
-            track_type: 0,
-            duration_secs: 0.0,
-            started_at: Local::now(),
-            cue_start: 0.0,
-            cue_next: 0.0,
-            cue_end: 0.0,
-            fade_in_ms: 0,
-            fade_out_ms: 0,
-        };
-        (path, playing)
     } else {
         return Err(anyhow!("play needs a 'songId' or a 'path'"));
     };
 
-    let (req, duration) = request_for_file(&path, &cue_knobs_of(&playing, patch.as_ref()))?;
+    // Opening a stream fetches the HTTP header on this (blocking) thread,
+    // never a Tokio worker.
+    let knobs = cue_knobs_of(&playing, patch.as_ref());
+    let (req, duration) = tokio::task::spawn_blocking(move || request_for_source(&raw_path, &knobs))
+        .await
+        .context("open source thread join")??;
     playing.duration_secs = duration;
 
     let plan = cue_knobs_of(&playing, None).plan();
@@ -800,8 +887,7 @@ async fn play_cart(app: &Arc<App>, args: &Value) -> Result<Value> {
     let song = radiocraft_db::entities::song_by_id(db.pool(), button.swID)
         .await?
         .ok_or_else(|| anyhow!("cart button {} links to missing song {}", button.swButton, button.swID))?;
-    let path = PathBuf::from(&song.path);
-    if !path.exists() {
+    if !is_stream_path(&song.path) && !PathBuf::from(&song.path).exists() {
         return Err(anyhow!("no such file: {}", song.path));
     }
 
@@ -816,7 +902,10 @@ async fn play_cart(app: &Arc<App>, args: &Value) -> Result<Value> {
     .await?;
 
     let knobs = knobs_from_song(&song);
-    let (req, duration) = request_for_file(&path, &knobs)?;
+    let (raw_path, knobs) = (song.path.clone(), knobs);
+    let (req, duration) = tokio::task::spawn_blocking(move || request_for_source(&raw_path, &knobs))
+        .await
+        .context("open source thread join")??;
     app.engine
         .play(Zone::Cart, req, i32::from(song.song_type), song.overlay)?;
     let cart = crate::state::CartNow {
@@ -828,7 +917,11 @@ async fn play_cart(app: &Arc<App>, args: &Value) -> Result<Value> {
     app.set_cart_now(cart.clone());
     // RadioDJ's sweeper button ducks the main program for the track length
     // (`ReduceVolumeForSeconds(duration, true, -10f)`).
-    app.apply_program_duck((duration * 1000.0).max(0.0) as i64);
+    // Infinite streams have no duration to time the duck against; leave the
+    // program level alone and let the button toggle release it.
+    if duration > 0.0 {
+        app.apply_program_duck((duration * 1000.0) as i64);
+    }
     Ok(json!({
         "cart": cart.info(),
         "historyId": history_id,
@@ -874,8 +967,7 @@ async fn play_instant(app: &Arc<App>, args: &Value) -> Result<Value> {
         .ok_or_else(|| {
             anyhow!("instant button {} links to missing song {}", button.swButton, button.swID)
         })?;
-    let path = PathBuf::from(&song.path);
-    if !path.exists() {
+    if !is_stream_path(&song.path) && !PathBuf::from(&song.path).exists() {
         return Err(anyhow!("no such file: {}", song.path));
     }
 
@@ -890,7 +982,10 @@ async fn play_instant(app: &Arc<App>, args: &Value) -> Result<Value> {
     .await?;
 
     let knobs = knobs_from_song(&song);
-    let (req, duration) = request_for_file(&path, &knobs)?;
+    let (raw_path, knobs) = (song.path.clone(), knobs);
+    let (req, duration) = tokio::task::spawn_blocking(move || request_for_source(&raw_path, &knobs))
+        .await
+        .context("open source thread join")??;
     app.engine
         .play(Zone::Instant, req, i32::from(song.song_type), song.overlay)?;
     let instant = crate::state::CartNow {
@@ -900,7 +995,11 @@ async fn play_instant(app: &Arc<App>, args: &Value) -> Result<Value> {
         title: song.title.clone(),
     };
     app.set_instant_now(instant.clone());
-    app.apply_program_duck((duration * 1000.0).max(0.0) as i64);
+    // Infinite streams have no duration to time the duck against; leave the
+    // program level alone and let the button toggle release it.
+    if duration > 0.0 {
+        app.apply_program_duck((duration * 1000.0) as i64);
+    }
     Ok(json!({
         "instant": instant.info(),
         "historyId": history_id,

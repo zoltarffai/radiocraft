@@ -33,6 +33,12 @@ pub fn spawn_pump(app: Arc<App>) -> tokio::task::JoinHandle<()> {
             ticker.tick().await;
             drain_events(&app).await;
             app.check_duck_expiry();
+            // Internet streams: when the broadcast sends new ICY metadata,
+            // refresh the now-playing frame immediately (RadioDJ's
+            // UseStreamTitle display behaviour).
+            if app.poll_stream_title() {
+                let _ = app.tx.send(app.player_frame());
+            }
             fan_state_changes(
                 &app,
                 &mut prev_main,

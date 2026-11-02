@@ -54,7 +54,10 @@ pub const SAMPLE_RATE: usize = 44_100;
 pub const CHANNELS: usize = 2;
 
 // Convenience re-exports — the surface the server/engine links against.
-pub use decoder::{FileSource, MemorySource, SilentSource, Source, sine_source};
+pub use decoder::{
+    FileSource, LiveTitle, MemorySource, SilentSource, Source, StreamSource, is_stream_path,
+    sine_source,
+};
 pub use device::{
     AudioSink, CpalSink, DeviceManager, NullSink, SinkInfo, WavSink,
 };

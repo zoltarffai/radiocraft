@@ -8,6 +8,10 @@
   const now = $derived(session.now);
   const z = $derived(session.zoneState(zone));
 
+  // Internet stream: the live ICY broadcast title replaces the stored
+  // row title (RadioDJ's UseStreamTitle behaviour).
+  const streamTitle = $derived(zone === "main" ? (now?.stream_title ?? "") : "");
+
   const position = $derived(scrub ?? z?.position_secs ?? 0);
   const duration = $derived(
     (z ? (z.position_secs ?? 0) + (z.remaining_secs ?? 0) : (now?.duration_secs ?? 0)) || 0
@@ -34,8 +38,10 @@
   <h2>Now playing — {zone}</h2>
 
   <div class="titles">
-    <div class="title" title={now?.title}>{now?.title || "—"}</div>
-    <div class="artist" title={now?.artist}>{now?.artist || ""}</div>
+    <div class="title" class:stream={!!streamTitle} title={streamTitle || now?.title}>
+      {streamTitle || now?.title || "—"}
+    </div>
+    <div class="artist" title={streamTitle ? "" : now?.artist}>{streamTitle ? "" : now?.artist || ""}</div>
   </div>
 
   <div class="timeline">
@@ -86,6 +92,10 @@
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+  }
+
+  .title.stream {
+    color: var(--accent);
   }
 
   .artist {

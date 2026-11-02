@@ -14,6 +14,12 @@
 
   let editing = $state<EditableSong | null>(null);
 
+  // Internet-stream row (RadioDJ song_type 5): URL lives in `path`.
+  let addingStream = $state(false);
+  let streamUrl = $state("");
+  let streamTitle = $state("");
+  let streamArtist = $state("");
+
   const songs = $derived(session.songs);
   const total = $derived(session.libraryTotal);
   const ready = $derived(session.conn === "open" && session.dbConnected);
@@ -150,6 +156,24 @@
     }
   }
 
+  async function addStream() {
+    const url = streamUrl.trim();
+    if (!/^https?:\/\//i.test(url)) {
+      session.lastError = "Stream URL must start with http:// or https://";
+      return;
+    }
+    await call(() =>
+      session.cmd("stream_add", {
+        url,
+        title: streamTitle.trim(),
+        artist: streamArtist.trim(),
+      })
+    );
+    addingStream = false;
+    streamUrl = streamTitle = streamArtist = "";
+    void search();
+  }
+
   function fmt(duration: string): string {
     return duration || "";
   }
@@ -181,6 +205,9 @@
       <option value="off">disabled only</option>
     </select>
     <button onclick={() => void search()} disabled={!ready || loading}>{loading ? "…" : "Search"}</button>
+    <button title="Add an internet stream to the library" onclick={() => (addingStream = true)} disabled={!ready}>
+      + Stream
+    </button>
     <button
       disabled={!ready || offset === 0}
       onclick={() => {
@@ -225,6 +252,22 @@
         <button class="primary" onclick={() => void saveEdit()}>Save</button>
         <button onclick={() => (editing = null)}>Cancel</button>
         <span class="mono dim path" title={editing.path}>{editing.path}</span>
+      </div>
+    </div>
+  {/if}
+
+  {#if addingStream}
+    <div class="editform">
+      <h3>Add internet stream</h3>
+      <div class="fields">
+        <label>URL <input type="text" placeholder="https://…" bind:value={streamUrl} /></label>
+        <label>Title <input type="text" placeholder="defaults to the URL" bind:value={streamTitle} /></label>
+        <label>Artist <input type="text" bind:value={streamArtist} /></label>
+      </div>
+      <div class="row">
+        <button class="primary" onclick={() => void addStream()}>Add stream</button>
+        <button onclick={() => (addingStream = false)}>Cancel</button>
+        <span class="dim">The live ICY broadcast title replaces the stored title while playing.</span>
       </div>
     </div>
   {/if}

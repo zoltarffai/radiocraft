@@ -30,6 +30,8 @@ export interface NowInfo {
   segment_secs?: number;
   /** RFC 3339, server local clock. */
   started_at: string;
+  /** Live ICY broadcast title while an internet stream plays. */
+  stream_title?: string;
 }
 
 export interface LevelInfo {

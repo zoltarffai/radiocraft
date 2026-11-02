@@ -135,6 +135,7 @@ impl NowPlaying {
                 None
             },
             started_at: self.started_at.to_rfc3339(),
+            stream_title: None,
         }
     }
 
@@ -220,6 +221,11 @@ pub struct App {
     /// Deadline for the temporary program duck applied while a cart or
     /// instant insert plays (RadioDJ's `ReduceVolumeForSeconds`).
     duck_until: std::sync::Mutex<Option<Instant>>,
+    /// Live ICY broadcast title of the main-zone stream (RadioDJ's
+    /// `UseStreamTitle` display); polled from the engine's shared cell.
+    stream_title: std::sync::RwLock<Option<String>>,
+    /// Version of the stream-title cell last folded into a frame.
+    stream_title_seen: std::sync::atomic::AtomicU64,
     /// AutoDJ switch/tuning (mirrors `AutoDJStart` in the old app).
     autodj: AutodjState,
     pub status: RwLock<Status>,
@@ -335,6 +341,8 @@ impl App {
             cart_now: std::sync::RwLock::new(None),
             instant_now: std::sync::RwLock::new(None),
             duck_until: std::sync::Mutex::new(None),
+            stream_title: std::sync::RwLock::new(None),
+            stream_title_seen: std::sync::atomic::AtomicU64::new(0),
             autodj,
             status: RwLock::new(Status::info("Not connected to the database")),
             tx,
@@ -520,6 +528,7 @@ impl App {
             });
         }
         let previous = self.now.write().expect("now lock").replace(playing);
+        self.reset_stream_title();
         if let Some(previous) = previous {
             self.book_finished(&previous).await;
         }
@@ -548,6 +557,46 @@ impl App {
         };
         if stale {
             self.on_track_finished().await;
+        }
+    }
+
+    /// The live ICY broadcast title of the main-zone stream, if any
+    /// (RadioDJ's stream-title display).
+    pub fn stream_title(&self) -> Option<String> {
+        self.stream_title.read().expect("stream title lock").clone()
+    }
+
+    /// Drop the cached broadcast title and restart version tracking
+    /// (called whenever the main zone rolls to a new item).
+    fn reset_stream_title(&self) {
+        *self.stream_title.write().expect("stream title lock") = None;
+        self.stream_title_seen
+            .store(0, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// Poll the main zone's broadcast-metadata cell; when the stream
+    /// published a new title, cache it and report the change so the pump
+    /// can push a fresh `player` frame.
+    pub fn poll_stream_title(&self) -> bool {
+        let cell = match self.engine.live_title(MAIN_ZONE) {
+            Some(cell) => cell,
+            None => {
+                if self.stream_title().is_some() {
+                    self.reset_stream_title();
+                    return true;
+                }
+                return false;
+            }
+        };
+        let seen = self.stream_title_seen.load(std::sync::atomic::Ordering::Relaxed);
+        match cell.changed_since(seen) {
+            Some((version, title)) => {
+                *self.stream_title.write().expect("stream title lock") = Some(title);
+                self.stream_title_seen
+                    .store(version, std::sync::atomic::Ordering::Relaxed);
+                true
+            }
+            None => false,
         }
     }
 
@@ -712,14 +761,19 @@ impl App {
 
     /// The transport/now-playing snapshot frame.
     pub fn player_frame(&self) -> Frame {
+        let stream_title = self.stream_title();
         let now = self
             .now
             .read()
             .expect("now lock")
             .as_ref()
-            .map(NowPlaying::info);
+            .map(|n| {
+                let mut info = n.info();
+                info.stream_title = stream_title.clone();
+                info
+            });
         Frame::Player {
-            now,
+            now: Box::new(now),
             zones: self.zone_states(),
             cart: self.cart_now().map(|c| c.info()),
             instant: self.instant_now().map(|c| c.info()),

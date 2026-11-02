@@ -75,6 +75,11 @@ pub struct NowInfo {
     pub segment_secs: Option<f64>,
     /// Item start, local wall clock, RFC 3339.
     pub started_at: String,
+    /// Live broadcast title (ICY `StreamTitle` / `icy-name`) while an
+    /// internet stream plays — RadioDJ shows this instead of the stored
+    /// row title once the stream sends metadata.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stream_title: Option<String>,
 }
 
 /// Master bus meters (20 Hz).
@@ -132,8 +137,9 @@ pub enum Frame {
         message: String,
     },
     /// Now-playing + per-zone transport state (pushed on change).
+    /// `now` is boxed to keep the frame enum lean (`NowInfo` is large).
     Player {
-        now: Option<NowInfo>,
+        now: Box<Option<NowInfo>>,
         zones: Vec<ZoneState>,
         /// Active cartwall button, when a cart is rolled.
         cart: Option<CartNowInfo>,

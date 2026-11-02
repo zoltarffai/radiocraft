@@ -15,7 +15,7 @@ use std::time::Duration;
 
 use parking_lot::Mutex;
 
-use crate::decoder::{FileSource, Source};
+use crate::decoder::{FileSource, LiveTitle, Source};
 use crate::device::{AudioSink, NullSink, WavSink};
 use crate::error::Result;
 use crate::fx::{SoundProcessor, VoiceAssistConfig, VoiceTrackAssist};
@@ -245,6 +245,14 @@ impl PlayoutEngine {
 
     pub fn position_secs(&self, zone: Zone) -> Option<f64> {
         self.inner.lock().slots.get(&zone).map(|s| s.player.position_secs())
+    }
+
+    /// Broadcast metadata cell of whatever `zone` is playing (internet
+    /// streams); `None` for files and idle zones. Cheap to clone: the cell
+    /// is shared with the audio thread, poll it with
+    /// [`LiveTitle::changed_since`](crate::decoder::LiveTitle::changed_since).
+    pub fn live_title(&self, zone: Zone) -> Option<LiveTitle> {
+        self.inner.lock().slots.get(&zone)?.player.live_title()
     }
 
     pub fn remaining_secs(&self, zone: Zone) -> Option<f64> {
