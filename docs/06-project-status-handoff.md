@@ -34,14 +34,15 @@ Recreate **RadioDJ v3.0.0.5** (Windows/.NET 4.8 radio playout app) as
   with the same UI code: a native Tauri window and a plain browser mode. v0.2 is now
   feature-complete (milestones below); "all features of RadioDJ" remains the long-term goal.
 
-## 2. Current state (as of `11e4c45`)
+## 2. Current state (as of `688b1c2`)
 
 Everything is committed; working tree clean. All tests green, clippy `-D warnings` clean
 for every crate except `radiocraft-window` on the host (see §7 for the exclude rule).
 Post-milestone feature-parity track (all in §5/§8): plugin hosting `eaf8170`+`27e3da6`+
 `577596f`+`77bafdb`, master sound FX `4317b15`, cart wall config/CRUD `281a1bb`,
 instant/cart-wall playback `835a86f`+`1eb2ed4`, cart-wall editor `1b5c493`, internet
-streams Type 5 with ICY live titles `11e4c45` (see §8).
+streams Type 5 with ICY live titles `11e4c45`, stream smoke fixes `688b1c2`, stream TLS
+interop fallback to OpenSSL (this commit) (see §8).
 
 | v0.2 milestone (docs/05 numbering) | Status | Commit |
 |---|---|---|
@@ -348,6 +349,24 @@ The default `EnvFilter` was `info,radiocraft=debug` — the crate targets are
 boundary must be `::`), so server DEBUG was silently off; now `info,radiocraft_server=debug`
 (use `RUST_LOG=info,radiocraft_audio=debug` for engine internals).
 
+Stream TLS interop (this commit): real-world Shoutcast DNAS hosts (verified against
+`https://s3.voscast.com:10647/listen`) offer ONLY static-RSA TLS 1.2 suites
+(e.g. `AES256-GCM-SHA384`); rustls deliberately does not implement those, so every
+rustls variant fails with `received fatal alert: HandshakeFailure` while openssl/
+curl/BASS succeed. Fix: `StreamSource::open_pipeline` splits the GET into `fetch
+(url, openssl)`; on a TLS-looking error (`looks_like_tls_failure`) it retries once
+through `native-tls`/OpenSSL (`ureq::native_tls::TlsConnector` via
+`AgentBuilder::tls_connector`) and remembers the choice (`tls_openssl` flag) so
+reconnects go straight to the stack that works. Behind cargo feature
+`openssl-fallback` (default ON in `radiocraft-audio`; `--no-default-features` drops
+OpenSSL and keeps pure rustls). This mirrors RadioDJ, which uses BASS + SCHANNEL/
+OpenSSL, never rustls. Diagnostic example kept: `cargo run --example tlsprobe -p
+radiocraft-audio -- <stream-url>` (default rustls / classic-kx / TLS1.2-only /
+TLS1.2+classic-kx / native-tls matrix). Build note: OpenSSL linkage needs
+`openssl-devel` (added to `.github/Dockerfile.manyrust`; Fedora host already has it).
+Live check: server log shows `stream …: host rejected rustls, retrying via OpenSSL`
+and main-zone `position_secs` keeps climbing across 90+ s of a live broadcast.
+
 Deferred fidelity checks (optional): cross-check `LoudnessCalculator.cs`. (Plugin_SoundProcessing
 FX keys/defaults were verified against the decompiles in `4317b15`.)
 
@@ -406,6 +425,15 @@ FX keys/defaults were verified against the decompiles in `4317b15`.)
   copyright isrc` — the schema has no defaults for those).
 - axum 0.8: `Message::Text(Utf8Bytes)`, handler state `State<ServerSocket>`; axum-test 21
   needs `ws` feature.
+- rustls 0.23: no static-RSA TLS 1.2 suites at all (ECDHE only) — legacy Shoutcast DNAS
+  hosts reject every rustls ClientHello; fix is the `native-tls` fallback, not config
+  knobs. Builder order: `ClientConfig::builder_with_provider(..).with_protocol_versions
+  (..)?` comes BEFORE `with_root_certificates`; plain `builder()` goes straight to
+  `WantsVerifier`.
+- ureq 2.12: `Error` has no `ConnectionFailed` constructor variant to build by hand;
+  `AgentBuilder::tls_config(Arc<rustls::ClientConfig>)` vs `tls_connector(Arc<impl
+  TlsConnector>)` (the latter takes `ureq::native_tls::TlsConnector` with feature
+  `native-tls`).
 - Svelte 5.57: exports `mount` (NOT `createApp`); templates forbid mixing `on:` legacy with
   new `oninput/onchange/onkeydown` on same element; no `svelte5` tsconfig option; vertical
   faders via CSS `writing-mode: vertical-rl; direction: rtl` (no `orient` attr).

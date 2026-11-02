@@ -379,6 +379,12 @@ fn build_pipeline(
 /// * Live metadata: `icy-name`/`icy-description` response headers and MP3
 ///   `StreamTitle` tags surface through [`Source::live_title`], the
 ///   equivalent of BASS's `BASS_TAG_GetFromURL` in RadioDJ.
+/// * TLS interop: rustls handles the modern side of the internet, but legacy
+///   Shoutcast DNAS hosts (e.g. voscast) offer only static-RSA TLS 1.2
+///   suites, which rustls deliberately does not implement. On a TLS
+///   handshake rejection the source re-opens once through OpenSSL
+///   (`native-tls`, feature `openssl-fallback`, on by default) — what
+///   BASS/SCHANNEL do in RadioDJ — and sticks with it for reconnects.
 pub struct StreamSource {
     url: String,
     inner: Pipeline,
@@ -391,6 +397,7 @@ pub struct StreamSource {
     failed: bool,
     reconnects: u32,
     ever_decoded: bool,
+    tls_openssl: bool,
     title: LiveTitle,
     last_meta: Option<String>,
 }
@@ -399,7 +406,7 @@ impl StreamSource {
     /// Open the stream; blocks while the HTTP response header is fetched.
     pub fn open(url: &str) -> Result<Self> {
         let title = LiveTitle::default();
-        let inner = Self::open_pipeline(url, None, &title)?;
+        let (inner, tls_openssl) = Self::open_pipeline(url, None, &title, false)?;
         let source_rate = inner.source_rate;
         Ok(StreamSource {
             url: url.to_string(),
@@ -413,6 +420,7 @@ impl StreamSource {
             failed: false,
             reconnects: 0,
             ever_decoded: false,
+            tls_openssl,
             title,
             last_meta: None,
         })
@@ -421,8 +429,9 @@ impl StreamSource {
     /// Re-open the URL and rebuild the decode pipeline; the previous stream
     /// is dropped, which closes its socket.
     fn reopen(&mut self) -> bool {
-        match Self::open_pipeline(&self.url, self.content_hint(), &self.title) {
-            Ok(inner) => {
+        match Self::open_pipeline(&self.url, self.content_hint(), &self.title, self.tls_openssl) {
+            Ok((inner, tls_openssl)) => {
+                self.tls_openssl = tls_openssl;
                 if inner.source_rate as usize != self.resampler.in_rate() {
                     self.resampler =
                         StreamResampler::new(inner.source_rate as usize, SAMPLE_RATE, 2);
@@ -449,19 +458,71 @@ impl StreamSource {
         first_hint(&self.url)
     }
 
-    fn open_pipeline(
+    /// Issue the GET for the stream body. The rustls agent is the default;
+    /// the `openssl` variant links OpenSSL through `native-tls`, which still
+    /// negotiates the legacy static-RSA TLS 1.2 suites that Shoutcast DNAS
+    /// hosts serve (rustls implements ECDHE suites only).
+    fn fetch(
         url: &str,
-        hint_ext: Option<String>,
-        title: &LiveTitle,
-    ) -> Result<Pipeline> {
-        let resp = ureq::AgentBuilder::new()
-            .try_proxy_from_env(true)
+        openssl: bool,
+    ) -> std::result::Result<ureq::Response, Box<ureq::Error>> {
+        let builder = ureq::AgentBuilder::new().try_proxy_from_env(true);
+        #[cfg(feature = "openssl-fallback")]
+        let mut builder = builder;
+        #[cfg(feature = "openssl-fallback")]
+        if openssl {
+            match ureq::native_tls::TlsConnector::builder().build() {
+                Ok(connector) => builder = builder.tls_connector(std::sync::Arc::new(connector)),
+                Err(e) => tracing::warn!("could not build OpenSSL TLS connector: {e}"),
+            }
+        }
+        #[cfg(not(feature = "openssl-fallback"))]
+        let _ = openssl;
+        builder
             .build()
             .get(url)
             .set("User-Agent", "Radiocraft/1.0 (stream client)")
             .set("Icy-MetaData", "1")
             .call()
-            .map_err(|e| AudioError::Decode(format!("{url}: {e}")))?;
+            .map_err(Box::new)
+    }
+
+    /// Does this transport error look like a TLS negotiation failure (rather
+    /// than DNS / connection refused / a hang)? Only those are worth retrying
+    /// through a different TLS stack.
+    fn looks_like_tls_failure(err: &ureq::Error) -> bool {
+        let msg = err.to_string().to_lowercase();
+        msg.contains("tls") || msg.contains("handshake") || msg.contains("alert")
+    }
+
+    /// Open the URL and build the decode pipeline. Returns the pipeline and
+    /// whether the (possibly fallen-back) TLS stack in use was OpenSSL, so
+    /// reconnects skip straight to the stack that works.
+    fn open_pipeline(
+        url: &str,
+        hint_ext: Option<String>,
+        title: &LiveTitle,
+        prefer_openssl: bool,
+    ) -> Result<(Pipeline, bool)> {
+        let mut openssl = prefer_openssl;
+        let resp = match Self::fetch(url, openssl) {
+            Ok(resp) => resp,
+            Err(e) => {
+                if openssl
+                    || !cfg!(feature = "openssl-fallback")
+                    || !Self::looks_like_tls_failure(&e)
+                {
+                    return Err(AudioError::Decode(format!("{url}: {e}")));
+                }
+                tracing::info!("stream {url}: host rejected rustls, retrying via OpenSSL");
+                openssl = true;
+                Self::fetch(url, true).map_err(|e2| {
+                    AudioError::Decode(format!(
+                        "{url}: openssl fallback also failed: {e2} (rustls: {e})"
+                    ))
+                })?
+            }
+        };
         let status = resp.status();
         if !(200..300).contains(&status) {
             return Err(AudioError::Decode(format!("{url}: HTTP status {status}")));
@@ -483,7 +544,7 @@ impl StreamSource {
         // lets symphonia estimate a length, never let it seed a VDF/stop-at
         // plan that would end playout early.
         pipeline.duration = None;
-        Ok(pipeline)
+        Ok((pipeline, openssl))
     }
 
     /// Decode packets, re-opening the URL when the connection drops. A live

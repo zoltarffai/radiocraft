@@ -13,9 +13,19 @@ parking_lot = "0.12"
 symphonia = { version = "0.5", default-features = false, features = ["mp3", "aac", "flac", "ogg", "vorbis", "wav", "isomp4", "alac", "pcm"] }
 hound = "3"
 ureq = { version = "2", features = ["gzip"] }
+native-tls = { version = "0.2", optional = true }
+
+[features]
+default = ["openssl-fallback"]
+# Legacy stream hosts (e.g. Shoutcast DNAS) sometimes offer only static-RSA
+# TLS 1.2 suites that rustls does not implement; fall back to OpenSSL.
+openssl-fallback = ["dep:native-tls", "ureq/native-tls"]
 
 [target.'cfg(target_os = "linux")'.dependencies]
 cpal = "0.15"
 
 [target.'cfg(not(target_os = "linux"))'.dependencies]
 cpal = "0.15"
+
+[dev-dependencies]
+webpki-roots = "0.26"
