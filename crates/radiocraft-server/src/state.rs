@@ -228,6 +228,9 @@ pub struct App {
     stream_title_seen: std::sync::atomic::AtomicU64,
     /// AutoDJ switch/tuning (mirrors `AutoDJStart` in the old app).
     autodj: AutodjState,
+    /// Track analyzer sweep in flight (`analyze_tracks`; RadioDJ's
+    /// `bwAnalyzeTracks.IsBusy` guard).
+    pub analyze_busy: std::sync::atomic::AtomicBool,
     pub status: RwLock<Status>,
     pub tx: broadcast::Sender<Frame>,
     /// External-cdylib plugin dispatcher; attached once by the server binary
@@ -345,6 +348,7 @@ impl App {
             stream_title_seen: std::sync::atomic::AtomicU64::new(0),
             autodj,
             status: RwLock::new(Status::info("Not connected to the database")),
+            analyze_busy: std::sync::atomic::AtomicBool::new(false),
             tx,
             plugins: std::sync::OnceLock::new(),
         };

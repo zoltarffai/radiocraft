@@ -17,8 +17,11 @@ use radiocraft_db::booking::{BookingParams, book_track};
 use radiocraft_db::entities::{LibraryFilter, LibrarySort, NewSong};
 
 use crate::frames::Frame;
-use crate::playback::{CueKnobs, knobs_from_song, request_for_file, request_for_source, split_stem};
-use crate::state::{App, NowPlaying, parse_zone, zone_name};
+use crate::playback::{
+    CueKnobs, build_cue_times, cue_tokens_from, knobs_from_song, request_for_file,
+    request_for_source, split_stem,
+};
+use crate::state::{App, NowPlaying, Status, parse_zone, zone_name};
 
 /// `songs.song_type` value marking an internet stream — RadioDJ's
 /// `TrackTypes.InternetStream` enum index.
@@ -342,6 +345,57 @@ async fn run(app: &Arc<App>, op: &str, args: &Value) -> Result<Value> {
             let ids = arg_ids(args)?;
             let rows = radiocraft_db::entities::mass_delete(db.pool(), &ids).await?;
             Ok(json!({ "removed": rows }))
+        }
+
+        // ---- library analysis (Plugin_TracksManager analyze tracks) -----------
+        "analyze_tracks" => {
+            let db = app.require_db().await?;
+            // TracksManager threshold spinners (dB, min -100); defaults
+            // selDbIn=-24, selDbNext=-5, selDbOut=-30.
+            let th = radiocraft_audio::cuepoints::CueThresholds {
+                start_db: args.get("dbIn").and_then(Value::as_f64).unwrap_or(-24.0),
+                next_db: args.get("dbNext").and_then(Value::as_f64).unwrap_or(-5.0),
+                end_db: args.get("dbEnd").and_then(Value::as_f64).unwrap_or(-30.0),
+            };
+            // Selected rows: explicit ids. Otherwise RadioDJ's sweep query:
+            // every library row except carts/jingles-type buckets 8,12,13,11,9,5.
+            let ids: Vec<u32> = match args.get("songIds") {
+                Some(Value::Array(items)) => items
+                    .iter()
+                    .map(|v| {
+                        v.as_u64()
+                            .map(|v| u32::try_from(v).ok())
+                            .ok_or_else(|| anyhow!("songIds must be positive ids"))
+                            .and_then(|v| v.ok_or_else(|| anyhow!("songIds must be positive ids")))
+                    })
+                    .collect::<Result<Vec<u32>>>()?,
+                _ => sqlx::query_scalar::<_, u32>(
+                    "SELECT `ID` FROM `songs` WHERE `song_type` NOT IN (8,12,13,11,9,5)",
+                )
+                .fetch_all(db.pool())
+                .await?,
+            };
+            // RadioDJ's `bwAnalyzeTracks` background worker: one sweep at a
+            // time, and it must not block this connection's command loop
+            // (decoding can run for minutes while transport keeps working).
+            if app.analyze_busy.swap(true, std::sync::atomic::Ordering::SeqCst) {
+                anyhow::bail!("track analyzis already running");
+            }
+            let total = ids.len() as u64;
+            let app = Arc::clone(app);
+            tokio::spawn(async move {
+                let report = analyze_sweep(&app, &db, &ids, &th).await;
+                app.analyze_busy.store(false, std::sync::atomic::Ordering::SeqCst);
+                if let Some(status) = report["status"].as_str() {
+                    app.set_status(Status::info(status)).await;
+                }
+                let _ = app.tx.send(Frame::Result {
+                    id: 0,
+                    op: "analyze_tracks".into(),
+                    data: report,
+                });
+            });
+            Ok(json!({ "started": total }))
         }
 
         // ---- history ------------------------------------------------------------
@@ -1022,6 +1076,93 @@ fn cue_knobs_of(playing: &NowPlaying, patch: Option<&CueKnobs>) -> CueKnobs {
         Some(patch) => base.merge(patch),
         None => base,
     }
+}
+
+// ---- analyze sweep (RadioDJ bwAnalyzeTracks_DoWork) --------------------------
+
+/// Decode + re-cue every id, writing `cue_times`/`duration` per row.
+/// Progress and the completion line are pushed through `set_status`
+/// (RadioDJ's `lblStatus`/`Application.DoEvents` loop).
+async fn analyze_sweep(
+    app: &App,
+    db: &radiocraft_db::Db,
+    ids: &[u32],
+    th: &radiocraft_audio::cuepoints::CueThresholds,
+) -> Value {
+    let total = ids.len();
+    let mut analyzed = 0usize;
+    let mut skipped = 0usize;
+    let mut errors: Vec<String> = Vec::new();
+    for (n, id) in ids.iter().enumerate() {
+        let Some(mut song) = (match radiocraft_db::entities::song_by_id(db.pool(), *id).await {
+            Ok(song) => song,
+            Err(e) => {
+                errors.push(format!("id {id}: {e}"));
+                skipped += 1;
+                continue;
+            }
+        }) else {
+            skipped += 1;
+            continue;
+        };
+        // SaveTrackData's switch: song types 5,8,9,11,12,13 are
+        // never analyzed, and missing files are skipped silently.
+        if matches!(song.song_type, 5 | 8 | 9 | 11 | 12 | 13)
+            || song.path.is_empty()
+            || !std::path::Path::new(&song.path).is_file()
+        {
+            skipped += 1;
+            continue;
+        }
+        app.set_status(Status::info(format!(
+            "Analyzing {}/{total}: {}",
+            n + 1,
+            song.path
+        )))
+        .await;
+        let path = std::path::PathBuf::from(&song.path);
+        let th = *th;
+        let triple = match tokio::task::spawn_blocking(move || {
+            radiocraft_audio::cuepoints::set_cue_points_file(&path, &th)
+        })
+        .await
+        {
+            Ok(Ok(t)) => t,
+            Ok(Err(e)) => {
+                // SetCuePoints returning false: row left untouched.
+                errors.push(format!("{}: {e}", song.path));
+                skipped += 1;
+                continue;
+            }
+            Err(e) => {
+                errors.push(format!("{}: {e}", song.path));
+                skipped += 1;
+                continue;
+            }
+        };
+        // Rebuild cue_times in SaveTrackData's token layout, keeping
+        // the tokens the analyzer does not touch, and book the
+        // analyzed play length into `duration` (CueNext - CueStart).
+        let mut tokens = cue_tokens_from(&song.cue_times);
+        tokens.start = triple.cue_start;
+        tokens.next = triple.cue_next;
+        tokens.end = triple.cue_end;
+        song.cue_times = build_cue_times(&tokens);
+        song.duration = decimal_from_f64(triple.cue_next - triple.cue_start);
+        if let Err(e) = radiocraft_db::entities::update_song(db.pool(), &song).await {
+            errors.push(format!("{}: save failed: {e}", song.path));
+            skipped += 1;
+            continue;
+        }
+        analyzed += 1;
+    }
+    json!({
+        "analyzed": analyzed,
+        "skipped": skipped,
+        "total": total,
+        "errors": errors,
+        "status": format!("Tracks analyzis completed! ({analyzed} analyzed, {skipped} skipped)"),
+    })
 }
 
 // ---- arg helpers --------------------------------------------------------------

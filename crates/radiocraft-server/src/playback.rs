@@ -156,6 +156,86 @@ pub fn knobs_from_song(song: &Song) -> CueKnobs {
     parse_cue_times(&song.cue_times)
 }
 
+/// Every cue token RadioDJ's `cue_times` string can carry — the set
+/// `SaveTrackData` rewrites after an analyze pass. Seconds unless noted;
+/// 0 means "not set" (except `fade_in_ms`, always written raw).
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct CueTokens {
+    pub start: f64,     // sta
+    pub intro: f64,     // int
+    pub loop_in: f64,   // pin
+    pub loop_out: f64,  // pou
+    pub hook_in: f64,   // hin
+    pub hook_out: f64,  // hou
+    pub outro: f64,     // out
+    pub next: f64,      // xta
+    pub end: f64,       // end
+    pub fade_in_ms: i64, // fin
+}
+
+/// Pull all ten tokens out of a `cue_times` string (missing keys stay 0).
+pub fn cue_tokens_from(cue_times: &str) -> CueTokens {
+    let mut t = CueTokens::default();
+    for part in cue_times.split('&') {
+        let (key, raw) = match part.split_once('=') {
+            Some(kv) => kv,
+            None => continue,
+        };
+        let value = raw.replace(',', ".");
+        match key {
+            "sta" => t.start = parse_f64(&value),
+            "int" => t.intro = parse_f64(&value),
+            "pin" => t.loop_in = parse_f64(&value),
+            "pou" => t.loop_out = parse_f64(&value),
+            "hin" => t.hook_in = parse_f64(&value),
+            "hou" => t.hook_out = parse_f64(&value),
+            "out" => t.outro = parse_f64(&value),
+            "xta" => t.next = parse_f64(&value),
+            "end" => t.end = parse_f64(&value),
+            "fin" => t.fade_in_ms = parse_f64(&value) as i64,
+            _ => {}
+        }
+    }
+    t
+}
+
+/// Rebuild the `cue_times` string exactly like `FormTracksManager.SaveTrackData`:
+/// fixed token order `&sta &int &pin &pou &hin &hou &out &xta &end &fin &fou`,
+/// `0` for any position that is not > 0, raw decimal otherwise. `fin` and
+/// `fou` are written unconditionally; `fou` is the analyze-mode value
+/// `CueEnd - CueNext` (seconds), which the players later read as a fade-out.
+pub fn build_cue_times(t: &CueTokens) -> String {
+    let mut out = String::new();
+    let pos = |key: &str, v: f64, out: &mut String| {
+        out.push('&');
+        out.push_str(key);
+        out.push('=');
+        if v > 0.0 {
+            out.push_str(&format_f64(v));
+        } else {
+            out.push('0');
+        }
+    };
+    pos("sta", t.start, &mut out);
+    pos("int", t.intro, &mut out);
+    pos("pin", t.loop_in, &mut out);
+    pos("pou", t.loop_out, &mut out);
+    pos("hin", t.hook_in, &mut out);
+    pos("hou", t.hook_out, &mut out);
+    pos("out", t.outro, &mut out);
+    pos("xta", t.next, &mut out);
+    pos("end", t.end, &mut out);
+    out.push_str(&format!("&fin={}", t.fade_in_ms));
+    out.push_str(&format!("&fou={}", format_f64(t.end - t.next)));
+    out
+}
+
+/// .NET `Conversions.ToString(double)`-ish: shortest digits, whole numbers
+/// without a fraction (VB prints `15`, not `15.0` — Rust's Display agrees).
+fn format_f64(v: f64) -> String {
+    v.to_string()
+}
+
 /// Open the media for `path` and build the `PlayRequest` for it (cue plan +
 /// loop region). HTTP(S) paths (RadioDJ internet streams, `song_type = 5`)
 /// open through [`StreamSource`]; everything else is a local file.
@@ -372,5 +452,37 @@ mod tests {
         let err = new_song_from_path(Path::new("/nonexistent/track.mp3"))
             .expect_err("missing file must fail");
         assert!(err.to_string().contains("opening"), "{err}");
+    }
+
+    #[test]
+    fn cue_times_tokens_round_trip() {
+        let src = "&sta=1.2&int=0&pin=3&pou=8&hin=0&hou=0&out=0&xta=45&end=50&fin=250&fou=5000";
+        let t = cue_tokens_from(src);
+        assert_eq!(t.start, 1.2);
+        assert_eq!(t.loop_in, 3.0);
+        assert_eq!(t.next, 45.0);
+        assert_eq!(t.end, 50.0);
+        assert_eq!(t.fade_in_ms, 250);
+        // Rebuild follows SaveTrackData: fou is recomputed as end - next.
+        assert_eq!(
+            build_cue_times(&t),
+            "&sta=1.2&int=0&pin=3&pou=8&hin=0&hou=0&out=0&xta=45&end=50&fin=250&fou=5"
+        );
+    }
+
+    #[test]
+    fn cue_times_build_matches_analyze_layout() {
+        // Fresh analysis result on an empty cue_times: zero positions print
+        // `0`, VB-style whole seconds print without a fraction.
+        let t = CueTokens {
+            start: 0.0,
+            next: 15.0,
+            end: 14.9995,
+            ..Default::default()
+        };
+        assert_eq!(
+            build_cue_times(&t),
+            "&sta=0&int=0&pin=0&pou=0&hin=0&hou=0&out=0&xta=15&end=14.9995&fin=0&fou=-0.0005000000000006111"
+        );
     }
 }

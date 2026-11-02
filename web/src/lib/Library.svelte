@@ -20,6 +20,12 @@
   let streamTitle = $state("");
   let streamArtist = $state("");
 
+  // Track analyzer (Plugin_TracksManager): dB thresholds + busy flag.
+  let analyzing = $state(false);
+  let anDbIn = $state(-24);
+  let anDbNext = $state(-5);
+  let anDbOut = $state(-30);
+
   const songs = $derived(session.songs);
   const total = $derived(session.libraryTotal);
   const ready = $derived(session.conn === "open" && session.dbConnected);
@@ -121,6 +127,26 @@
       await search(false);
     } catch (e) {
       session.lastError = String(e);
+    }
+  }
+
+  async function analyzeTracks() {
+    if (analyzing) return;
+    const scope = ids.length > 0 ? `${ids.length} selected track(s)` : "the entire library";
+    if (!window.confirm(`Re-analyze cue points for ${scope}? Stored cue positions are overwritten.`)) return;
+    analyzing = true;
+    try {
+      await session.cmd("analyze_tracks", {
+        ...(ids.length > 0 ? { songIds: ids } : {}),
+        dbIn: anDbIn,
+        dbNext: anDbNext,
+        dbEnd: anDbOut,
+      });
+      await search(false);
+    } catch (e) {
+      session.lastError = String(e);
+    } finally {
+      analyzing = false;
     }
   }
 
@@ -235,6 +261,17 @@
     </div>
   {/if}
 
+  <div class="row analyze">
+    <span class="dim">analyze dB</span>
+    <label>start <input type="number" min="-100" max="0" step="1" bind:value={anDbIn} disabled={analyzing} /></label>
+    <label>next <input type="number" min="-100" max="0" step="1" bind:value={anDbNext} disabled={analyzing} /></label>
+    <label>end <input type="number" min="-100" max="0" step="1" bind:value={anDbOut} disabled={analyzing} /></label>
+    <button title="Detect cue in / next / out (with selection: selected rows only)" disabled={!ready || analyzing} onclick={() => void analyzeTracks()}>
+      {analyzing ? "Analyzing…" : "Analyze"}
+    </button>
+    <span class="dim">level thresholds (defaults -24 / -5 / -30)</span>
+  </div>
+
   {#if editing}
     <div class="editform">
       <h3>Edit song #{editing.ID}</h3>
@@ -322,6 +359,18 @@
     margin-left: auto;
     color: var(--fg-dim);
     font-size: 12px;
+  }
+
+  .analyze label {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 11px;
+    color: var(--fg-dim);
+  }
+
+  .analyze input {
+    width: 7ch;
   }
 
   .editform {
