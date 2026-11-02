@@ -580,6 +580,14 @@ async fn run(app: &Arc<App>, op: &str, args: &Value) -> Result<Value> {
         // ---- cart wall ------------------------------------------------------------
         "cartwall_get_config" => crate::cartwall::op_get(app),
         "cartwall_set_config" => crate::cartwall::op_set(app, args),
+        "aux_players_get_config" => crate::auxplayers::op_get_config(app),
+        "aux_players_set_config" => crate::auxplayers::op_set_config(app, args),
+        "aux_players_load" => crate::auxplayers::op_load(app, args).await,
+        "aux_players_play" => crate::auxplayers::op_play(app, args).await,
+        "aux_players_stop" => crate::auxplayers::op_stop(app, args),
+        "aux_players_seek" => crate::auxplayers::op_seek(app, args),
+        "aux_players_loop" => crate::auxplayers::op_loop(app, args),
+        "aux_players_clear" => crate::auxplayers::op_clear(app, args),
         "cartwall_create" => crate::cartwall::op_create(app, args).await,
         "cartwall_rename" => crate::cartwall::op_rename(app, args).await,
         "cartwall_delete" => crate::cartwall::op_delete(app, args).await,
@@ -1181,7 +1189,7 @@ pub fn arg_str(args: &Value, key: &str) -> Result<String> {
         .with_context(|| format!("missing string arg {key}"))
 }
 
-fn arg_f64(args: &Value, key: &str) -> Result<f64> {
+pub(crate) fn arg_f64(args: &Value, key: &str) -> Result<f64> {
     args.get(key)
         .and_then(|v| v.as_f64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
         .ok_or_else(|| anyhow!("missing numeric arg {key}"))

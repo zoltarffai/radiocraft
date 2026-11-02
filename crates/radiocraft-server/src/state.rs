@@ -7,6 +7,7 @@
 //! behind a tokio [`broadcast`] channel; one pump task fans engine
 //! events and meters out to it.
 
+use std::borrow::Cow;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -72,13 +73,15 @@ pub fn db_config_from(database: &DatabaseSettings) -> DbConfig {
     cfg
 }
 
-/// Wire name of a zone (`main`/`aux`/`cart`/`instant`).
-pub fn zone_name(zone: Zone) -> &'static str {
+/// Wire name of a zone (`main`/`aux`/`cart`/`instant`, plus `aux1`..`aux15`
+/// for the configurable `Plugin_AuxPlayers` players).
+pub fn zone_name(zone: Zone) -> Cow<'static, str> {
     match zone {
-        Zone::Main => "main",
-        Zone::Aux => "aux",
-        Zone::Cart => "cart",
-        Zone::Instant => "instant",
+        Zone::Main => Cow::Borrowed("main"),
+        Zone::Aux => Cow::Borrowed("aux"),
+        Zone::Cart => Cow::Borrowed("cart"),
+        Zone::Instant => Cow::Borrowed("instant"),
+        Zone::AuxPlayer(n) => Cow::Owned(format!("aux{n}")),
     }
 }
 
@@ -89,7 +92,12 @@ pub fn parse_zone(name: &str) -> Option<Zone> {
         "aux" => Some(Zone::Aux),
         "cart" => Some(Zone::Cart),
         "instant" => Some(Zone::Instant),
-        _ => None,
+        _ => {
+            // auxN = the N-th configurable aux player (Plugin_AuxPlayers).
+            let digits = name.strip_prefix("aux")?;
+            let n: u8 = digits.parse().ok()?;
+            (n >= 1).then_some(Zone::AuxPlayer(n))
+        }
     }
 }
 
@@ -207,6 +215,12 @@ pub struct App {
     pub(crate) soundfx: std::sync::RwLock<radiocraft_audio::ProcessorConfig>,
     /// Built-in cart wall config (`settings_cartwall.xml`).
     pub cartwall: std::sync::RwLock<crate::cartwall::CartwallConfig>,
+    /// Aux-player config (`settings_Plugin_AuxPlayers.xml` parity with
+    /// `Plugin_AuxPlayers`: player count, plugin zone, stop fade).
+    pub auxplayers: std::sync::RwLock<crate::auxplayers::AuxPlayersConfig>,
+    /// Track loaded in each aux player slot, indexed by player-1
+    /// (`APlayer.AuxPlayerTrack`); the slots exist up to `MAX_PLAYERS`.
+    aux_tracks: std::sync::RwLock<Vec<Option<crate::auxplayers::AuxTrack>>>,
     /// `None` until the operator connects (`dbConnect`).
     pub db: RwLock<Option<Db>>,
     pub db_cfg: RwLock<DbConfig>,
@@ -338,6 +352,12 @@ impl App {
             plugin_export: std::sync::RwLock::new(plugin_export),
             soundfx: std::sync::RwLock::new(radiocraft_audio::ProcessorConfig::default()),
             cartwall: std::sync::RwLock::new(crate::cartwall::CartwallConfig::default()),
+            auxplayers: std::sync::RwLock::new(crate::auxplayers::AuxPlayersConfig::default()),
+            aux_tracks: std::sync::RwLock::new(
+                std::iter::repeat_with(|| None)
+                    .take(crate::auxplayers::MAX_PLAYERS as usize)
+                    .collect(),
+            ),
             db: RwLock::new(None),
             db_cfg: RwLock::new(db_config_from(&database)),
             now: std::sync::RwLock::new(None),
@@ -358,6 +378,10 @@ impl App {
         // Seed the built-in cart wall config (`settings_cartwall.xml`).
         if let Ok(cfg) = crate::cartwall::load_config(&app) {
             *app.cartwall.write().expect("cartwall lock") = cfg;
+        }
+        // Seed the aux-player config (`settings_Plugin_AuxPlayers.xml`).
+        if let Ok(cfg) = crate::auxplayers::load_config(&app) {
+            *app.auxplayers.write().expect("auxplayers lock") = cfg;
         }
         Ok(app)
     }
@@ -718,6 +742,60 @@ impl App {
         }
     }
 
+    // ---- aux players (Plugin_AuxPlayers) -------------------------------------
+
+    /// The current aux-player config (`PlayersCount`/`PluginZone`/
+    /// `StopFadeDuration` from `settings_Plugin_AuxPlayers.xml`).
+    pub fn aux_config(&self) -> crate::auxplayers::AuxPlayersConfig {
+        *self.auxplayers.read().expect("auxplayers lock")
+    }
+
+    /// Live-swap the aux-player config (players past the new count are
+    /// retired by the caller).
+    pub fn set_aux_config(&self, cfg: crate::auxplayers::AuxPlayersConfig) {
+        *self.auxplayers.write().expect("auxplayers lock") = cfg;
+    }
+
+    /// The track loaded into one aux player slot, if any.
+    pub fn aux_track(&self, player: u8) -> Option<crate::auxplayers::AuxTrack> {
+        let tracks = self.aux_tracks.read().expect("aux tracks lock");
+        tracks
+            .get(usize::from(player).checked_sub(1)?)
+            .cloned()
+            .flatten()
+    }
+
+    /// Load a track into an aux player slot (replacing any previous one).
+    pub fn set_aux_track(&self, track: crate::auxplayers::AuxTrack) {
+        let mut tracks = self.aux_tracks.write().expect("aux tracks lock");
+        if let Some(slot) = tracks.get_mut(usize::from(track.player).saturating_sub(1)) {
+            *slot = Some(track);
+        }
+    }
+
+    /// Stop and unload one aux player slot (`APlayer.ClearPlayer`).
+    pub fn clear_aux_track(&self, player: u8) {
+        let mut tracks = self.aux_tracks.write().expect("aux tracks lock");
+        if let Some(slot) = usize::from(player)
+            .checked_sub(1)
+            .and_then(|i| tracks.get_mut(i))
+        {
+            *slot = None;
+        }
+    }
+
+    /// Loaded tracks for the configured players, in player order.
+    pub fn aux_tracks_loaded(&self) -> Vec<crate::frames::AuxPlayerInfo> {
+        let count = u8::try_from(self.aux_config().players_count).unwrap_or(0);
+        let tracks = self.aux_tracks.read().expect("aux tracks lock");
+        tracks
+            .iter()
+            .flatten()
+            .filter(|t| t.player <= count)
+            .map(|t| t.info())
+            .collect()
+    }
+
     // ---- program ducking ------------------------------------------------------
 
     /// Duck the main program for `duration_ms` while a cart/instant insert
@@ -781,12 +859,14 @@ impl App {
             zones: self.zone_states(),
             cart: self.cart_now().map(|c| c.info()),
             instant: self.instant_now().map(|c| c.info()),
+            aux_players: self.aux_tracks_loaded(),
         }
     }
 
-    /// Live position + playing flags for every zone.
+    /// Live position + playing flags for every zone (base zones plus the
+    /// configured `Plugin_AuxPlayers` players, in wire order).
     pub fn zone_states(&self) -> Vec<ZoneState> {
-        ALL_ZONES
+        self.live_zones()
             .into_iter()
             .map(|zone| ZoneState {
                 zone: zone_name(zone).to_string(),
@@ -798,9 +878,21 @@ impl App {
             .collect()
     }
 
+    /// The zones carried on the wire: the four base zones plus aux player
+    /// 1..=`PlayersCount` (`Plugin_AuxPlayers`).
+    fn live_zones(&self) -> Vec<Zone> {
+        let count = u8::try_from(self.aux_config().players_count).unwrap_or(0);
+        ALL_ZONES
+            .iter()
+            .copied()
+            .chain((1..=count).map(Zone::AuxPlayer))
+            .collect()
+    }
+
     /// The mixer snapshot frame (live master gain + zone faders/mutes).
     pub fn state_frame(&self) -> Frame {
-        let zones = ALL_ZONES
+        let zones = self
+            .live_zones()
             .into_iter()
             .map(|zone| ZoneMix {
                 zone: zone_name(zone).to_string(),
@@ -902,11 +994,13 @@ mod tests {
 
     #[test]
     fn zones_round_trip() {
-        for name in ["main", "aux", "cart", "instant"] {
+        for name in ["main", "aux", "cart", "instant", "aux1", "aux7", "aux15"] {
             let zone = parse_zone(name).expect("known zone");
             assert_eq!(zone_name(zone), name);
         }
         assert!(parse_zone("other").is_none());
+        assert_eq!(parse_zone("aux"), Some(Zone::Aux), "bare aux is the Zone::Aux zone");
+        assert!(parse_zone("aux0").is_none(), "player numbers are 1-based");
     }
 
     #[test]

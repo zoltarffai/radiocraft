@@ -59,6 +59,21 @@ pub struct CartNowInfo {
     pub title: String,
 }
 
+/// One configured aux player (`Plugin_AuxPlayers`) with its loaded track
+/// (sent in the `auxPlayers` list of `player` frames, in player order).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AuxPlayerInfo {
+    /// 1-based player number (RadioDJ's "Player N").
+    pub player: u8,
+    /// `songs.ID` of the loaded library track; 0 for ad-hoc paths/URLs.
+    pub song_id: i64,
+    pub artist: String,
+    pub title: String,
+    pub duration_secs: f64,
+    /// Loop button selected (`ButLoop`): play restarts in the loop region.
+    pub loop_enabled: bool,
+}
+
 /// Now-playing metadata block (null in `player` frames when idle).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct NowInfo {
@@ -145,6 +160,10 @@ pub enum Frame {
         cart: Option<CartNowInfo>,
         /// Active instant/cart wall button (`Plugin_InstantPlayers`).
         instant: Option<CartNowInfo>,
+        /// Loaded aux-player tracks (`Plugin_AuxPlayers`), player order;
+        /// empty when the plugin players are unconfigured or unloaded.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        aux_players: Vec<AuxPlayerInfo>,
     },
     /// Master meters + live positions, pushed at 20 Hz.
     Meters {

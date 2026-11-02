@@ -7,7 +7,10 @@ use serde::{Deserialize, Serialize};
 use crate::util::{clamp_f64, db_to_lin, lin_to_db};
 
 /// Playout zones as they appear in the RadioDJ player windows.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+///
+/// The derived ordering (declaration order, then payload) is the render
+/// and wire order: base zones first, then aux players ascending.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum Zone {
     /// Main / linear player (the song queue).
     Main,
@@ -17,6 +20,9 @@ pub enum Zone {
     Cart,
     /// Instant-insert (news, station ID, on-demand files).
     Instant,
+    /// Configurable extra player from the `Plugin_AuxPlayers` contract
+    /// ("Player 1..15"); `n` is the 1-based player number.
+    AuxPlayer(u8),
 }
 
 pub const ALL_ZONES: [Zone; 4] = [Zone::Main, Zone::Aux, Zone::Cart, Zone::Instant];
@@ -176,7 +182,7 @@ impl Mixer {
         let strip = self.strip(zone);
         let duck = match zone {
             Zone::Main | Zone::Aux => self.duck_lin.min(self.vt_duck_lin),
-            Zone::Cart | Zone::Instant => 1.0,
+            Zone::Cart | Zone::Instant | Zone::AuxPlayer(_) => 1.0,
         };
         strip.gain() * duck
     }

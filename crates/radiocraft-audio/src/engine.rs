@@ -21,7 +21,7 @@ use crate::error::Result;
 use crate::fx::{SoundProcessor, VoiceAssistConfig, VoiceTrackAssist};
 use crate::levels::{LevelTracker, PeakMeter};
 use crate::loudness::LoudnessScan;
-use crate::mixer::{Mixer, Zone, ALL_ZONES};
+use crate::mixer::{Mixer, Zone};
 use crate::player::{PlayRequest, Player, PlayerEvent};
 use crate::util::db_to_lin;
 use crate::waveform::{DEFAULT_WINDOWS, WaveformCache, WaveformData};
@@ -348,7 +348,12 @@ impl PlayoutEngine {
         let mut inner = self.inner.lock();
         let mut master = vec![0.0f32; frames * 2];
 
-        for zone in ALL_ZONES {
+        // Dynamic zone set: aux players (Zone::AuxPlayer(n)) only exist
+        // once configured, so iterate live slots in wire order instead of
+        // the fixed base-zone list.
+        let mut zones: Vec<Zone> = inner.slots.keys().copied().collect();
+        zones.sort();
+        for zone in zones {
             let gain = inner.mixer.zone_gain(zone);
             let slot = match inner.slots.get_mut(&zone) {
                 Some(s) => s,
