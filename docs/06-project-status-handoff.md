@@ -1,9 +1,13 @@
 # Project status & handoff — RadioCraft
 
-Snapshot date: 2026-11-02. Latest code commit: `4317b15` (master sound-processing parity:
-rewritten `radiocraft-audio` FX chain + server `soundfx` module with `fx_get`/`fx_set` ops
-persisting `Plugins/Plugin_SoundProcessing.xml` + Options ▸ Processing web tab), on top of the
-plugin trio `eaf8170` (host wiring), `27e3da6` (fixture + dylib e2e test), `577596f` (web plugin
+Snapshot date: 2026-11-02. Latest code commits: `835a86f` (instant/cart-wall playback
+parity: `play_instant` op on a dedicated instant zone with temporary program duck,
+player-frame `instant` slot, `live_instant_play` test) + `1eb2ed4` (web instant wall —
+`CartWall.svelte` zone prop, mounted twice), on top of `281a1bb` (cart wall config +
+wall/button CRUD ops), the master FX trio `4317b15` (rewritten `radiocraft-audio` FX
+chain + server `soundfx` module with `fx_get`/`fx_set` ops persisting
+`Plugins/Plugin_SoundProcessing.xml` + Options ▸ Processing web tab), and the plugin
+trio `eaf8170` (host wiring), `27e3da6` (fixture + dylib e2e test), `577596f` (web plugin
 panel), and `77bafdb` (plugin boot-scan fix). No tags exist yet; branch is
 `master`. This document is the
 single source of truth for "where everything stands" when a fresh session
@@ -30,10 +34,13 @@ Recreate **RadioDJ v3.0.0.5** (Windows/.NET 4.8 radio playout app) as
   with the same UI code: a native Tauri window and a plain browser mode. v0.2 is now
   feature-complete (milestones below); "all features of RadioDJ" remains the long-term goal.
 
-## 2. Current state (as of `0904464`)
+## 2. Current state (as of `1eb2ed4`)
 
 Everything is committed; working tree clean. All tests green, clippy `-D warnings` clean
 for every crate except `radiocraft-window` on the host (see §7 for the exclude rule).
+Post-milestone feature-parity track (all in §5/§8): plugin hosting `eaf8170`+`27e3da6`+
+`577596f`+`77bafdb`, master sound FX `4317b15`, cart wall config/CRUD `281a1bb`,
+instant/cart-wall playback `835a86f`+`1eb2ed4`.
 
 | v0.2 milestone (docs/05 numbering) | Status | Commit |
 |---|---|---|
@@ -65,7 +72,7 @@ Cargo workspace (8 crates, all Linux):
 | `radiocraft-net` | ~1.7k | RadioDJ's own now-playing exporters (file/web/serial — NOT replaced by axum server), `autost.rs` (`CloseAction`/`ClosePolicy`/`close_action_label`), `nowplaying.rs` (`encoding_code`, `ExportDraft`), AutoBackup |
 | `radiocraft-plugin` | ~3.0k | plugin ABI: Host/Plugin traits + cdylib C-ABI vtable mirroring rdjInterface (70 optional slots, NULL-tolerant, catch_unwind fences, JSON payloads) |
 | `radiocraft-plugin-example` | ~0.2k | reference cdylib plugin / ABI fixture (Echo, Remember/Recall, CountStates), loaded by `tests/plugin_dylib_e2e.rs` |
-| `radiocraft-server` | ~2.7k | axum WS/REST + static web host. modules: `frames auth playback state dispatch pump http ws run grid playlist` + tests `ws_e2e.rs http_e2e.rs` (38 lib tests) |
+| `radiocraft-server` | ~6.6k | axum WS/REST + static web host. modules: `frames auth autodj cartwall dispatch frames grid http playback playlist plugin_host pump rotations run settings soundfx state ws` + tests `commands.rs http_e2e.rs plugin_dylib_e2e.rs settings_ops.rs ws_e2e.rs` (47 lib tests) |
 | `radiocraft-window` | ~240 | Tauri 2 shell (see §5) |
 
 Non-cargo: `web/` — Svelte 5 + Vite 8 (rolldown) + TypeScript UI.
@@ -107,10 +114,12 @@ WS frames (JSON): server sends `{"t":"ready"}` first. Client (optional) `{"t":"h
 `args`**. Errors: `{"code":"unauthorized"}` closes socket. There is **no `get_zonestate`**
 op — state is pushed. `sub`-gated pushes only.
 
-Ops (dispatch.rs, ~80): `play pause resume stop stop_all stop_at seek segue_now cue
+Ops (dispatch.rs, ~90): `play pause resume stop stop_all stop_at seek segue_now cue
 get_setting set_setting set_zone_fader_db set_zone_muted set_master_db get_db_config
 db_configure db_connect list_songs search_songs list_playlists list_playlist_items
-list_carts list_cart_buttons list_history play_cart` — plus the milestone-3 parity set:
+list_carts list_cart_buttons list_history play_cart play_instant
+cartwall_get_config cartwall_set_config cartwall_create cartwall_rename cartwall_delete
+cartwall_save_buttons` — plus the milestone-3 parity set:
 library `library_filter library_get library_add library_update library_delete
 library_mass_set library_mass_delete`; history `history_filter history_add history_delete
 play_history` (rewind = re-add to library, returns `{"restored":id}`); playlists
@@ -131,6 +140,32 @@ the main now-playing hub; the cart zone auto-ducks main via the mixer. The `play
 carries `cart: {button_id,cart_id,song_id,title}|null` for the wall highlight; `stop` on the
 cart zone or natural finish clears it. Results: `{cart,historyId,duration_secs}` or
 `{stopped:true,buttonId}`. Covered live by `tests/commands.rs::live_cart_play`.
+
+Cart wall CRUD (`cartwall` module, `src/cartwall.rs`): config lives in
+`settings_cartwall.xml` (KvStore, keys `Columns`=4, `Rows`=6, `StopFadeDuration`=1s,
+`AutoRoll` — names follow Plugin_InstantPlayers' FormConfig defaults; grid capacity is
+Columns×Rows). Ops `cartwall_get_config` / `cartwall_set_config` (partial), and CRUD over
+the plain `carts` + `carts_list` tables (no instant-specific table exists in RadioDJ):
+`cartwall_create {name}` → `{cartId}`, `cartwall_rename {cartId,name}`, `cartwall_delete
+{cartId}` (also clears `carts_list` rows and the rolled highlight), `cartwall_save_buttons
+{cartId, buttons:[{slot,songId,color}]}` delete-then-insert in one transaction with
+slot/song validation. `list_carts` / `list_cart_buttons` feed the UI. Wall changes fan out
+to plugins as `ConfigChanged`.
+
+Instant wall play parity (`play_instant`, Plugin_InstantPlayers): same args as `play_cart`.
+The instant zone carries its own now-slot (`App.instant_now`, same shape as the cart one),
+and — unlike the cart zone's automatic mixer duck — pressing a button ducks the main
+program for the track's full duration the way `CartButtonControl` does: `App` keeps
+`duck_until` and calls `engine.set_duck_db` (level = `engine_config.duck_db` when already
+negative, else −10 dB), the pump expires the duck at track end, and any `stop`/`stop_all`
+releases it early. Toggle-stop fades with `StopFadeDuration` seconds. Plugin fan-out
+reuses `CartStarted`/`CartEnded` with `{"id":<button_id>,"plugin":true}` so subscribers can
+tell instant button ids from carts. The `player` frame gained `instant: {button_id,
+cart_id,song_id,title}|null` beside `cart`. Results match `play_cart` shapes. Web: the
+`CartWall.svelte` panel takes a `zone` prop and is mounted twice in `App.svelte` (Carts +
+Instant wall), sharing wall selection/buttons via `session.selectedCart`; session state
+`instantNow` feeds the second grid's highlight. Covered live by
+`tests/commands.rs::live_instant_play`.
 
 Key result shapes: `{songs}`, `{total,songs}`, `{history}`, `{total,history}`,
 `{playlists}`, `{items}`, `{playlistId}`, `{song}`, `{songId}`, `{itemId}`, `{queued}`,
@@ -269,6 +304,13 @@ Still open:
    `tauri.conf.json`: targets deb/rpm, identifier `dev.radiocraft.window`).
 2. Cosmetic: on shell exit two benign GTK teardown warnings (appindicator known quirk) +
    libayatana deprecation warning — harmless.
+3. Cart/instant wall UI polish: the panel shows the button grid and plays from it, but
+   wall create/rename/delete and button assignment (pick a song for a slot) are not
+   wired in the web UI yet — the `cartwall_*` ops exist server-side; RadioDJ's
+   configuration window is the reference.
+4. Feature parity gaps: internet streams (song Type 5, ICY/SH metadata, `UseStreamTitle`),
+   auto-fill silence detection (ThresholdStart/Next/End), and the `Plugin_AuxPlayers`
+   contract (extra configurable zones beyond the built-in four).
 
 Deferred fidelity checks (optional): cross-check `LoudnessCalculator.cs`. (Plugin_SoundProcessing
 FX keys/defaults were verified against the decompiles in `4317b15`.)

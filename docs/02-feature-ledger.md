@@ -31,7 +31,7 @@ Complete RadioDJ v3.0.0.5 feature inventory, mined from shipped config samples (
 | BASS config | BASS_CONFIG_BUFFER / MIXER_BUFFER / REC_BUFFER / VISTA_TRUEPOS | device/init tuning |
 | Silence removal | remove_silence | import-time silence trim |
 | Loudness | BSTarget, UseBSLoudness, BS1770, BSLoudness, loudness column | ITU-R BS.1770 loudness scan |
-| Aux/Cart/Instant players | Plugin_AuxPlayers (PlayersCount, PluginZone, StopFadeDuration), Plugin_InstantPlayers (DefaultCartID, DefaultInstantID, Columns, Rows, Sep*) | jocket/cart launch, hot-swap on air |
+| Aux/Cart/Instant players | Plugin_AuxPlayers (PlayersCount, PluginZone, StopFadeDuration), Plugin_InstantPlayers (DefaultCartID, DefaultInstantID, Columns, Rows, Sep*) | jocket/cart launch, hot-swap on air. RadioCraft: `play_cart` (cart zone) + `play_instant` (instant zone + program duck), `cartwall` module for wall/button CRUD + config, `CartWall.svelte` mounted for both zones; `Plugin_AuxPlayers` contract still open |
 | Sound processing | Plugin_SoundProcessing: AGCEnabled, CompressorEnabled (cThreshold/cAttack/cRelease/cRatio/cGain), StereoEnhancerEnabled, eqON/eqValues, fxDampPreset, fxStereo, vol_Out | master FX chain: EQ, compressor, AGC, stereo enh, limiter |
 
 ## 3. AutoDJ scheduler
