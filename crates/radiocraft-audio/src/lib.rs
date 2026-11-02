@@ -34,6 +34,7 @@
 //! behind [`AudioSink`](device::AudioSink) and the engine renders into plain
 //! `f32` buffers that tests can inspect directly.
 
+pub mod cuepoints;
 pub mod decoder;
 pub mod device;
 pub mod engine;
