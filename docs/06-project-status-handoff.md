@@ -1,7 +1,8 @@
 # Project status & handoff — RadioCraft
 
-Snapshot date: 2026-10-31. Latest code commits: `9fc8b5a` (AutoDJ server wiring) plus the
-AutoDJ web panel; `717c412` was the last pre-AutoDJ milestone. No tags exist yet; branch is
+Snapshot date: 2026-11-02. Latest code commits: `77bafdb` (plugin boot-scan fix) on top of
+the plugin-platform trio `eaf8170` (host wiring), `27e3da6` (fixture + dylib e2e test),
+`577596f` (web plugin panel). No tags exist yet; branch is
 `master`. This document is the
 single source of truth for "where everything stands" when a fresh session
 starts. Read it together with:
@@ -61,12 +62,15 @@ Cargo workspace (8 crates, all Linux):
 | `radiocraft-settings` | ~1.3k | `settings_*.xml` (NewDataSet layout), language tables; `DatabaseSettings` incl. `MinimizeToTray`, `FILE: settings_database.xml` |
 | `radiocraft-net` | ~1.7k | RadioDJ's own now-playing exporters (file/web/serial — NOT replaced by axum server), `autost.rs` (`CloseAction`/`ClosePolicy`/`close_action_label`), `nowplaying.rs` (`encoding_code`, `ExportDraft`), AutoBackup |
 | `radiocraft-plugin` | ~3.0k | plugin ABI: Host/Plugin traits + cdylib C-ABI vtable mirroring rdjInterface (70 optional slots, NULL-tolerant, catch_unwind fences, JSON payloads) |
+| `radiocraft-plugin-example` | ~0.2k | reference cdylib plugin / ABI fixture (Echo, Remember/Recall, CountStates), loaded by `tests/plugin_dylib_e2e.rs` |
 | `radiocraft-server` | ~2.7k | axum WS/REST + static web host. modules: `frames auth playback state dispatch pump http ws run grid playlist` + tests `ws_e2e.rs http_e2e.rs` (38 lib tests) |
 | `radiocraft-window` | ~240 | Tauri 2 shell (see §5) |
 
 Non-cargo: `web/` — Svelte 5 + Vite 8 (rolldown) + TypeScript UI.
 `web/src/lib/`: `protocol.ts` (wire), `session.svelte.ts` (WS client state, reads `?token=`),
-`App.svelte`, `NowPlaying/Meter/ZoneMixer/Library/Database/HistoryPanel.svelte`.
+`App.svelte`, and panels `NowPlaying` `Meter` `ZoneMixer` `CartWall` `Library` `Database`
+`HistoryPanel` `QueuePanel` `PlaylistEditor` `AutoDJPanel` `RotationEditor` `SettingsPanel`
+`PluginPanel`.
 
 Artifacts: `dist/RadioCraft-0.1.0-x86_64.AppImage` (v0.1; AppImage script `scripts/build-appimage.sh`
 now packages radiocraft-server + web/dist).
@@ -101,7 +105,7 @@ WS frames (JSON): server sends `{"t":"ready"}` first. Client (optional) `{"t":"h
 `args`**. Errors: `{"code":"unauthorized"}` closes socket. There is **no `get_zonestate`**
 op — state is pushed. `sub`-gated pushes only.
 
-Ops (dispatch.rs, 55): `play pause resume stop stop_all stop_at seek segue_now cue
+Ops (dispatch.rs, ~80): `play pause resume stop stop_all stop_at seek segue_now cue
 get_setting set_setting set_zone_fader_db set_zone_muted set_master_db get_db_config
 db_configure db_connect list_songs search_songs list_playlists list_playlist_items
 list_carts list_cart_buttons list_history play_cart` — plus the milestone-3 parity set:
@@ -234,14 +238,33 @@ token gate extended over the whole `/api/*` surface (`Authorization: Bearer` or
 `RADIOCRAFT_AUTH_TOKEN=letmein ./target/debug/radiocraft-server`: 401 without/with a bad
 token, flat results with it, `cmd_failed`/`bad_json` error mapping.
 
+Plugin hosting is now closed too (was the last open wiring item): `radiocraft-server/src/
+plugin_host.rs` hosts external cdylib plugins against the `radiocraft-plugin` ABI.
+`PluginManager::start` spawns the single-threaded `rc-plugins` dispatcher; the boot scan of
+`<config-dir>/Plugins/*.so` runs **on that thread** (never from a tokio worker — manager
+control calls use `blocking_recv` and panic inside a runtime). `load_into_registry` is the
+single load path for boot + `plugin_load`; per-plugin `ServerHost` shims implement the full
+`Host` trait and are leaked by design. SQL from plugins round-trips onto the captured main
+runtime (`exec_sql_in`), falling back to a private current-thread runtime. WS/REST ops:
+`plugin_list` / `plugin_load` (relative paths resolve under `<config-dir>/Plugins`) /
+`plugin_unload` / `plugin_invoke` — all via `spawn_blocking`. State fan-out is diff-based in
+`pump.rs`: `PlayerStarted/Ended` (SongData JSON), `CurrentlyPlayingChanged`, `CartStarted/
+Ended`, `Timer` (1 s), plus AutoDJ enable/disable; events reach clients as `plugin_event`
+frames. Settings host calls persist through `PluginSettings::save_at` (the `save()` path
+fails for not-yet-existing files). Fixture: `crates/radiocraft-plugin-example` (cdylib,
+`export_plugin!`, actions Echo/Remember/Recall/CountStates) — a dev-dependency of
+`radiocraft-server` so `tests/plugin_dylib_e2e.rs` loads the real `.so` and also checks the
+ABI gate rejects a bogus dylib. Web panel: `web/src/lib/PluginPanel.svelte` (load/unload/
+invoke table + recent `plugin_event` log). Live-verified over REST: boot scan loads the
+fixture, Echo lands in the status line, clean `SIGTERM` shutdown logs "plugin dispatcher
+thread stopped".
+
 Still open:
 
 1. Packaging for the shell: `cargo tauri build` deb/rpm job (bundle config already in
    `tauri.conf.json`: targets deb/rpm, identifier `dev.radiocraft.window`).
 2. Cosmetic: on shell exit two benign GTK teardown warnings (appindicator known quirk) +
    libayatana deprecation warning — harmless.
-3. Optional: wire the `radiocraft-plugin` `PluginRegistry`/`load_plugin` into the server so
-   external dylib plugins actually load (today only the built-in NowPlaying exporter runs).
 
 Deferred fidelity checks (optional): cross-check `LoudnessCalculator.cs`, Plugin_SoundProcessing
 FX keys against decompiles.
@@ -302,7 +325,7 @@ FX keys against decompiles.
 ## 11. Quick session-start checklist
 
 1. `cd /home/john/Dev/radiocraft && export PATH=$HOME/.cargo/bin:$PATH`
-2. `git log --oneline -3` (expect `0904464` or newer), `git status` (expect clean)
+2. `git log --oneline -3` (expect `77bafdb` or newer), `git status` (expect clean)
 3. Check infra: `ss -H -lnt '( sport = :8030 )'` (server), `ss -H -lnt '( sport = :3306 )'`
    (MariaDB); restart per §9 if down.
 4. `cargo test --workspace --exclude radiocraft-window && cargo clippy --workspace --exclude
