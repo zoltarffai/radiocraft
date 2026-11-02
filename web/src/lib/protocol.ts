@@ -110,6 +110,7 @@ export type Frame =
       zones: ZoneState[];
       cart: CartNowInfo | null;
       instant: CartNowInfo | null;
+      aux_players?: AuxPlayerInfo[];
     }
   | { t: "meters"; master: LevelInfo; zones: ZoneState[] }
   | { t: "state"; master_db: DbWire; zones: ZoneMix[] }
@@ -276,6 +277,28 @@ export interface CartNowInfo {
   /** songs.ID of the linked track. */
   song_id: number;
   title: string;
+}
+
+/** One loaded `Plugin_AuxPlayers` track (player frame `aux_players`). */
+export interface AuxPlayerInfo {
+  /** 1-based player number (RadioDJ's "Player N"). */
+  player: number;
+  /** songs.ID of the loaded library track; 0 for ad-hoc paths/URLs. */
+  song_id: number;
+  artist: string;
+  title: string;
+  duration_secs: number;
+  /** Loop button selected (`ButLoop`). */
+  loop_enabled: boolean;
+}
+
+/** Aux-player config (`settings_Plugin_AuxPlayers.xml`). */
+export interface AuxPlayersConfig {
+  playersCount: number;
+  /** Reference-app sound-card zone; stored for config compatibility only. */
+  pluginZone: number;
+  /** Stop-button fade in milliseconds (0..10000). */
+  stopFadeMs: number;
 }
 
 /** Grid config of the cart/instant walls (`settings_cartwall.xml`). */

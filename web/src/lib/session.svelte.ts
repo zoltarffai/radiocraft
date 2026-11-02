@@ -11,6 +11,8 @@ import type {
   CartHeader,
   CartNowInfo,
   CartwallConfig,
+  AuxPlayerInfo,
+  AuxPlayersConfig,
   ClientMsg,
   CriteriaRow,
   DbConfigView,
@@ -96,6 +98,10 @@ class Session {
   selectedCart = $state<number | null>(null);
   /** Grid config behind both walls (`cartwall_get_config` / `_set_config`). */
   cartwallConfig = $state<CartwallConfig | null>(null);
+  /** Loaded `Plugin_AuxPlayers` tracks (player frame `aux_players`). */
+  auxPlayers = $state<AuxPlayerInfo[]>([]);
+  /** Aux-player config (`aux_players_get_config` / `_set_config`). */
+  auxConfig = $state<AuxPlayersConfig | null>(null);
   queue = $state<QueueRow[]>([]);
   history = $state<HistoryRow[]>([]);
   /** Row count of the last library_filter/history_filter (pagination). */
@@ -294,6 +300,38 @@ class Session {
   /** Partial update (`cartwall_set_config` echoes the whole config back). */
   async setCartwallConfig(patch: Partial<CartwallConfig>): Promise<void> {
     this.cartwallConfig = await this.cmd<CartwallConfig>("cartwall_set_config", patch);
+  }
+
+  // ---- aux players (auxplayers.rs, Plugin_AuxPlayers parity) ----------------
+
+  /** Fetch the aux-player config into `auxConfig`. */
+  async loadAuxConfig(): Promise<void> {
+    this.auxConfig = await this.cmd<AuxPlayersConfig>("aux_players_get_config");
+  }
+  /** Partial update (`aux_players_set_config` echoes the whole config back). */
+  async setAuxConfig(patch: Partial<AuxPlayersConfig>): Promise<void> {
+    this.auxConfig = await this.cmd<AuxPlayersConfig>("aux_players_set_config", patch);
+  }
+  /** Load a library song (by id) or raw path/URL into one player slot. */
+  async auxLoad(player: number, track: { songId?: number; path?: string }): Promise<void> {
+    await this.cmd("aux_players_load", { player, ...track });
+  }
+  /** Play/stop toggle for one player (`PlayersForm.PlayAUX`). */
+  async auxPlay(player: number): Promise<void> {
+    await this.cmd("aux_players_play", { player });
+  }
+  /** Fade-stop one player, keeping the loaded track. */
+  async auxStop(player: number): Promise<void> {
+    await this.cmd("aux_players_stop", { player });
+  }
+  async auxSeek(player: number, secs: number): Promise<void> {
+    await this.cmd("aux_players_seek", { player, secs });
+  }
+  async auxLoop(player: number, on: boolean): Promise<void> {
+    await this.cmd("aux_players_loop", { player, on });
+  }
+  async auxClear(player: number): Promise<void> {
+    await this.cmd("aux_players_clear", { player });
   }
   async createCartWall(name: string): Promise<number> {
     const r = await this.cmd<{ cartId: number }>("cartwall_create", { name });
@@ -559,6 +597,7 @@ class Session {
         this.zones = f.zones;
         this.cartNow = f.cart;
         this.instantNow = f.instant;
+        this.auxPlayers = f.aux_players ?? [];
         break;
       case "meters":
         this.master = f.master;
@@ -635,8 +674,8 @@ class Session {
     }
   }
 
-  /** Per-zone helper for components. */
-  zoneState(zone: ZoneName): ZoneState | undefined {
+  /** Per-zone helper for components (`aux1`..`aux15` are dynamic names). */
+  zoneState(zone: ZoneName | string): ZoneState | undefined {
     return this.zones.find((z) => z.zone === zone);
   }
   zoneMix(zone: ZoneName): ZoneMix | undefined {
