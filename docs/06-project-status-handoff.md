@@ -1,8 +1,10 @@
 # Project status & handoff — RadioCraft
 
-Snapshot date: 2026-11-02. Latest code commits: `77bafdb` (plugin boot-scan fix) on top of
-the plugin-platform trio `eaf8170` (host wiring), `27e3da6` (fixture + dylib e2e test),
-`577596f` (web plugin panel). No tags exist yet; branch is
+Snapshot date: 2026-11-02. Latest code commit: `4317b15` (master sound-processing parity:
+rewritten `radiocraft-audio` FX chain + server `soundfx` module with `fx_get`/`fx_set` ops
+persisting `Plugins/Plugin_SoundProcessing.xml` + Options ▸ Processing web tab), on top of the
+plugin trio `eaf8170` (host wiring), `27e3da6` (fixture + dylib e2e test), `577596f` (web plugin
+panel), and `77bafdb` (plugin boot-scan fix). No tags exist yet; branch is
 `master`. This document is the
 single source of truth for "where everything stands" when a fresh session
 starts. Read it together with:
@@ -227,7 +229,9 @@ exporter rebuild). The chosen device persists as the `audio_device` extra key in
 (file/web/serial channels, templates, custom title, track-type list). Offline tests:
 `crates/radiocraft-server/tests/settings_ops.rs`; live WS smoke:
 `/tmp/opencode/rc-settings-smoke.mjs`. Web panel `web/src/lib/SettingsPanel.svelte`
-(Sound tab: device picker, sound-card fades, sound-option knobs; Now-playing tab: full
+(Sound tab: device picker, sound-card fades, sound-option knobs; Processing tab: master
+FX — output level, stereo enhancer, compressor with preset/manual params, 10-band EQ grid,
+AGC preset; Now-playing tab: full
 export editor with per-row URL/method list and Test-export snapshot readout). Scheduler
 options are the AutoDJ panel's knobs (`SchedulerConfig` via `autodj_set`), already shipped.
 
@@ -266,8 +270,8 @@ Still open:
 2. Cosmetic: on shell exit two benign GTK teardown warnings (appindicator known quirk) +
    libayatana deprecation warning — harmless.
 
-Deferred fidelity checks (optional): cross-check `LoudnessCalculator.cs`, Plugin_SoundProcessing
-FX keys against decompiles.
+Deferred fidelity checks (optional): cross-check `LoudnessCalculator.cs`. (Plugin_SoundProcessing
+FX keys/defaults were verified against the decompiles in `4317b15`.)
 
 ## 9. Live smoke infrastructure (recreate if needed)
 
