@@ -102,7 +102,13 @@ export type Frame =
     }
   | ({ t: "result"; id: number; op: string } & Record<string, unknown>)
   | { t: "error"; id: number | null; code: string; message: string }
-  | { t: "player"; now: NowInfo | null; zones: ZoneState[]; cart: CartNowInfo | null }
+  | {
+      t: "player";
+      now: NowInfo | null;
+      zones: ZoneState[];
+      cart: CartNowInfo | null;
+      instant: CartNowInfo | null;
+    }
   | { t: "meters"; master: LevelInfo; zones: ZoneState[] }
   | { t: "state"; master_db: DbWire; zones: ZoneMix[] }
   | ({ t: "status" } & StatusInfo)

@@ -2,13 +2,19 @@
   import { session } from "./session.svelte";
   import type { CartButtonRow } from "./protocol";
 
-  let selectedCart = $state<number | null>(null);
+  /** Transport the wall drives: `cart` is the core cartwall, `instant` is
+   *  the instant/cart wall (`Plugin_InstantPlayers`) on its own zone. */
+  let { zone = "cart" }: { zone?: "cart" | "instant" } = $props();
+
   let busy = $state(false);
 
+  const heading = $derived(zone === "instant" ? "Instant wall" : "Carts");
+  const isInstant = $derived(zone === "instant");
   const carts = $derived(session.carts);
   const buttons = $derived(session.cartButtons);
-  const active = $derived(session.cartNow);
-  const playing = $derived(session.zoneState("cart")?.playing ?? false);
+  const selectedCart = $derived(session.selectedCart);
+  const active = $derived(isInstant ? session.instantNow : session.cartNow);
+  const playing = $derived(session.zoneState(zone)?.playing ?? false);
 
   // RadioDJ lays buttons out by their `swButton` slot number.
   const grid = $derived.by(() => {
@@ -20,7 +26,6 @@
   });
 
   async function selectCart(id: number) {
-    selectedCart = id;
     try {
       await session.loadCartButtons(id);
     } catch (e) {
@@ -32,7 +37,7 @@
     if (busy) return;
     busy = true;
     try {
-      await session.cmd("play_cart", { buttonId: button.ID });
+      await session.cmd(isInstant ? "play_instant" : "play_cart", { buttonId: button.ID });
     } catch (e) {
       session.lastError = String(e);
     } finally {
@@ -47,7 +52,7 @@
 </script>
 
 <section class="panel carts">
-  <h2>Carts</h2>
+  <h2>{heading}</h2>
 
   <div class="row">
     <label class="csel">

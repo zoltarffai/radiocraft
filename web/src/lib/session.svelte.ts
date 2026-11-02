@@ -84,6 +84,10 @@ class Session {
   cartButtons = $state<CartButtonRow[]>([]);
   /** Cartwall button currently rolled on the cart zone (from player frames). */
   cartNow = $state<CartNowInfo | null>(null);
+  /** Instant/cart wall button rolled on the instant zone (player frame `instant`). */
+  instantNow = $state<CartNowInfo | null>(null);
+  /** Wall currently shown on the cart/instant panels (shared by both). */
+  selectedCart = $state<number | null>(null);
   queue = $state<QueueRow[]>([]);
   history = $state<HistoryRow[]>([]);
   /** Row count of the last library_filter/history_filter (pagination). */
@@ -261,6 +265,7 @@ class Session {
   async loadCartButtons(id: number): Promise<void> {
     const r = await this.cmd<{ buttons: CartButtonRow[] }>("list_cart_buttons", { cartId: id });
     this.cartButtons = r.buttons ?? [];
+    this.selectedCart = id;
   }
 
   // ---- library edit ops -----------------------------------------------------
@@ -511,6 +516,7 @@ class Session {
         this.now = f.now;
         this.zones = f.zones;
         this.cartNow = f.cart;
+        this.instantNow = f.instant;
         break;
       case "meters":
         this.master = f.master;
