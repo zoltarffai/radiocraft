@@ -25,7 +25,9 @@ use radiocraft_plugin::loader::load_plugin;
 use radiocraft_plugin::plugin::Plugin;
 use radiocraft_plugin::{Host, PluginRegistry};
 
-use crate::playback::{new_song_from_path, parse_cue_times, request_for_file, CueKnobs};
+use crate::playback::{
+    new_song_from_path, parse_cue_times, request_for_file, track_gain_from_values, CueKnobs,
+};
 use crate::state::{App, NowPlaying, MAIN_ZONE};
 
 /// Static process state for the handful of IHost switches the server does
@@ -1014,7 +1016,7 @@ impl Host for ServerHost {
     fn play_playlist_track(&self, track_number: i32, with_fade: bool) {
         let pid = self.current_playlist_id();
         let reply = self.sql_or(
-            "SELECT s.path, s.cue_times, s.song_type FROM songs s \
+            "SELECT s.path, s.cue_times, s.song_type, s.loudness, s.bs_loudness FROM songs s \
              JOIN playlists_list p ON p.sID = s.ID WHERE p.pID = ? AND p.ord = ?",
             vec![pid.to_string(), track_number.to_string()],
         );
@@ -1026,8 +1028,17 @@ impl Host for ServerHost {
         };
         let track_type = json_get_i64(row, "song_type").unwrap_or(0) as i32;
         let knobs = parse_cue_times(&json_get_str(row, "cue_times").unwrap_or_default());
+        let gain_lin = {
+            let general = self.app.general.read().expect("general lock");
+            track_gain_from_values(
+                json_get_f64(row, "loudness").unwrap_or(0.0),
+                json_get_f64(row, "bs_loudness").unwrap_or(0.0),
+                &general,
+            )
+        };
         match request_for_file(Path::new(&path), &knobs) {
             Ok((req, _)) => {
+                let req = req.with_track_gain_lin(gain_lin);
                 if !with_fade {
                     // "Play without fade": cut whatever is sounding first.
                     self.app.engine.stop(MAIN_ZONE, -999);
@@ -1231,7 +1242,8 @@ impl Host for ServerHost {
         // Carts are ordinary songs rows hung under `carts_list` buttons;
         // play the button's song on the cart zone from position 0.
         let reply = self.sql_or(
-            "SELECT s.ID, s.artist, s.title, s.path, s.cue_times, s.song_type, s.overlay \
+            "SELECT s.ID, s.artist, s.title, s.path, s.cue_times, s.song_type, s.overlay, \
+             s.loudness, s.bs_loudness \
              FROM songs s JOIN carts_list c ON c.swID = s.ID WHERE c.swButton = ?",
             vec![cart_number.to_string()],
         );
@@ -1244,10 +1256,18 @@ impl Host for ServerHost {
         let knobs = parse_cue_times(&json_get_str(row, "cue_times").unwrap_or_default());
         let track_type = json_get_i64(row, "song_type").unwrap_or(0) as i32;
         let overlay = json_get_i64(row, "overlay").unwrap_or(0) != 0;
+        let gain_lin = {
+            let general = self.app.general.read().expect("general lock");
+            track_gain_from_values(
+                json_get_f64(row, "loudness").unwrap_or(0.0),
+                json_get_f64(row, "bs_loudness").unwrap_or(0.0),
+                &general,
+            )
+        };
         match request_for_file(Path::new(&path), &knobs) {
             Ok((req, _)) => {
                 // Cart plays start at position 0, same as the cart_play op.
-                let req = req.starting_at(0.0);
+                let req = req.starting_at(0.0).with_track_gain_lin(gain_lin);
                 if let Err(e) = self.app.engine.play(Zone::Cart, req, track_type, overlay) {
                     self.log(&format!("play_cart_by_number: {e}"));
                 }
@@ -1349,7 +1369,7 @@ impl ServerHost {
         };
         match request_for_file(path, &knobs) {
             Ok((req, _)) => {
-                let req = req.starting_at(offset.max(0.0));
+                let req = req.starting_at(offset.max(0.0)).with_track_gain_lin(now.gain_lin);
                 if let Err(e) =
                     self.app
                         .engine
@@ -1459,6 +1479,9 @@ pub fn row_json_to_songdata(row: &Value) -> SongData {
         cue_start: json_get_f64(row, "cstart").unwrap_or(0.0),
         cue_end: json_get_f64(row, "cend").unwrap_or(0.0),
         cue_next: json_get_f64(row, "cnext").unwrap_or(0.0),
+        loudness: json_get_f64(row, "loudness").unwrap_or(0.0),
+        bs_loudness: json_get_f64(row, "bs_loudness").unwrap_or(0.0),
+        bs1770: json_get_f64(row, "bs1770").unwrap_or(0.0),
         ..SongData::default()
     }
 }

@@ -25,7 +25,7 @@ use radiocraft_settings::PluginSettings;
 use rust_decimal::prelude::ToPrimitive as _;
 use serde_json::{json, Value};
 
-use crate::playback::{knobs_from_song, request_for_source, split_stem, CueKnobs};
+use crate::playback::{knobs_from_song, request_for_source, split_stem, track_gain_for, CueKnobs};
 use crate::state::{App, Status};
 
 /// Config file for the aux players (under the config dir), matching the
@@ -82,6 +82,10 @@ pub struct AuxTrack {
     pub knobs: CueKnobs,
     /// `ButLoop.Selected`: restarts inside the track's loop region.
     pub loop_enabled: bool,
+    /// Linear playout volume multiplier resolved at load time from the
+    /// row's loudness columns + `UseBSLoudness` (docs/06 §8); 1.0 for
+    /// ad-hoc path/URL loads with no library row.
+    pub gain_lin: f64,
 }
 
 impl AuxTrack {
@@ -237,6 +241,7 @@ async fn load_from_song(app: &Arc<App>, player: u8, song_id: i64) -> Result<AuxT
         .ok_or_else(|| anyhow!("no such song {song_id}"))?;
     let knobs = knobs_from_song(&song);
     let duration = song.duration.to_f64().unwrap_or(0.0).max(0.0);
+    let gain_lin = track_gain_for(&song, &app.general.read().expect("general lock"));
     Ok(AuxTrack {
         player,
         song_id,
@@ -247,6 +252,7 @@ async fn load_from_song(app: &Arc<App>, player: u8, song_id: i64) -> Result<AuxT
         duration_secs: duration,
         knobs,
         loop_enabled: false,
+        gain_lin,
     })
 }
 
@@ -264,6 +270,7 @@ fn load_from_path(player: u8, raw_path: &str) -> Result<AuxTrack> {
             duration_secs: 0.0,
             knobs: CueKnobs::default(),
             loop_enabled: false,
+            gain_lin: 1.0,
         });
     }
     let path = std::path::Path::new(raw_path);
@@ -284,6 +291,7 @@ fn load_from_path(player: u8, raw_path: &str) -> Result<AuxTrack> {
         duration_secs: duration,
         knobs: CueKnobs::default(),
         loop_enabled: false,
+        gain_lin: 1.0,
     })
 }
 
@@ -324,6 +332,7 @@ pub async fn op_play(app: &Arc<App>, args: &Value) -> Result<Value> {
     .await
     .context("open source thread join")??;
 
+    let req = req.with_track_gain_lin(track.gain_lin);
     app.engine.play(zone, req, track.track_type, false)?;
 
     // History at play start, like `APlayer.PlayAux` booking the track.

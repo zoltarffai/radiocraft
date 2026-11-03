@@ -118,6 +118,10 @@ pub struct NowPlaying {
     pub cue_end: f64,
     pub fade_in_ms: i32,
     pub fade_out_ms: i32,
+    /// Linear playout volume multiplier resolved at play time from the
+    /// row's loudness columns + `UseBSLoudness` (docs/06 §8). Carried so
+    /// re-cues keep the same gain; 1.0 for streams and ad-hoc sources.
+    pub gain_lin: f64,
 }
 
 impl NowPlaying {
@@ -1019,6 +1023,7 @@ mod tests {
             cue_end: 0.0,
             fade_in_ms: 0,
             fade_out_ms: 0,
+            gain_lin: 1.0,
         };
         assert_eq!(playing.segment_secs(), 0.0);
         assert!(playing.info().segment_secs.is_none());

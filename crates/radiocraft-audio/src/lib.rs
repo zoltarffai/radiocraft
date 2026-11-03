@@ -16,8 +16,8 @@
 //! - [`fx`] — the `Plugin_SoundProcessing` chain (10-band EQ, compressor,
 //!   limiter, output trim) and voice-track assist thresholds.
 //! - [`loudness`] — ITU-R BS.1770-4 K-weighting / gated integrated loudness
-//!   and 4x-oversampled true-peak meters (feeds the `bs1770` and `loudness`
-//!   library columns).
+//!   and 4x-oversampled true-peak meters (feeds the `bs1770` and
+//!   `bs_loudness` library columns).
 //! - [`levels`] — peak / VU meters and a combined level tracker for meters
 //!   and voice-track assist.
 //! - [`waveform`] — peak-window waveform data with a `.wfx`-style binary
@@ -70,7 +70,7 @@ pub use fx::{
 };
 pub use levels::{LevelTracker, PeakMeter, VuMeter};
 pub use loudness::{
-    integrated_lufs, scan, true_peak_dbtp, KWeighting, LoudnessMeter,
+    gain_to_target, integrated_lufs, scan, true_peak_dbtp, KWeighting, LoudnessMeter,
     LoudnessScan, TruePeakMeter,
 };
 pub use mixer::{ChannelStrip, Mixer, Zone};

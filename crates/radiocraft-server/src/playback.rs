@@ -9,12 +9,14 @@
 use std::path::Path;
 
 use anyhow::Result;
+use rust_decimal::prelude::ToPrimitive as _;
 use rust_decimal::Decimal;
 use serde::Deserialize;
 
 use radiocraft_audio::decoder::{FileSource, Source, StreamSource};
 use radiocraft_audio::player::PlayRequest;
 use radiocraft_db::entities::{NewSong, Song};
+use radiocraft_settings::GeneralSettings;
 
 /// Raw cue knobs for one track, seconds; 0 = "not set" (RadioDJ convention).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Deserialize)]
@@ -310,6 +312,34 @@ fn path_string(path: &Path) -> String {
     path.to_str().map(str::to_string).unwrap_or_else(|| path.display().to_string())
 }
 
+/// Linear playout volume multiplier for a library row, mirroring RadioDJ's
+/// playout consumption (`APlayer.cs`: `SetTrackVolume = (float)TrackData
+/// .BSLoudness` when `Vars.UseBSLoudness`, else `TrackData.Loudness`).
+/// Rows never loudness-scanned hold the schema default `0.000`; treat that
+/// as "no change" (1.0) — RadioDJ's scan-reset rewrites rows to `1.000`,
+/// so the untouched default would otherwise mean silence.
+pub fn track_gain_from_values(loudness: f64, bs_loudness: f64, g: &GeneralSettings) -> f64 {
+    let raw = if *g.use_bs_loudness() {
+        bs_loudness
+    } else {
+        loudness
+    };
+    if raw > 0.0 {
+        raw
+    } else {
+        1.0
+    }
+}
+
+/// [`track_gain_from_values`] for a `songs` row (decimal columns -> f64).
+pub fn track_gain_for(song: &Song, g: &GeneralSettings) -> f64 {
+    track_gain_from_values(
+        song.loudness.to_f64().unwrap_or(0.0),
+        song.bs_loudness.to_f64().unwrap_or(0.0),
+        g,
+    )
+}
+
 /// File-name split used for newly added files: `Artist - Title`.
 pub fn split_stem(path: &Path) -> (String, String) {
     let stem = path
@@ -533,5 +563,22 @@ mod tests {
         assert_eq!(format_f64(0.0005), "0.0005");
         assert_eq!(format_f64(1e15), "1E+15");
         assert_eq!(format_f64(999999999999999.0), "999999999999999");
+    }
+
+    fn general(bs: bool) -> GeneralSettings {
+        let mut g = GeneralSettings::default();
+        g.set_use_bs_loudness(bs);
+        g
+    }
+
+    #[test]
+    fn track_gain_selects_column_and_guards_unscanned() {
+        // UseBSLoudness picks bs_loudness, otherwise the legacy column;
+        // both are plain linear multipliers.
+        assert_eq!(track_gain_from_values(1.5, 0.9, &general(true)), 0.9);
+        assert_eq!(track_gain_from_values(1.5, 0.9, &general(false)), 1.5);
+        // Unscanned rows (schema default 0.000) must not silence playout.
+        assert_eq!(track_gain_from_values(0.0, 0.0, &general(true)), 1.0);
+        assert_eq!(track_gain_from_values(0.0, 0.0, &general(false)), 1.0);
     }
 }

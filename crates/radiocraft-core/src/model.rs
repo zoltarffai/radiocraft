@@ -102,6 +102,9 @@ pub struct SongData {
     pub bpm: i32,
     pub loudness: f64,
     pub bs1770: f64,
+    /// Linear gain multiplier from the loudness scan (`SongData.BSLoudness`);
+    /// applied at playout when `UseBSLoudness` is on (docs/06 §8).
+    pub bs_loudness: f64,
     pub high_precision: bool,
     pub weight: f64,
     pub play_limit: i32,

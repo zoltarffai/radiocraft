@@ -416,6 +416,19 @@ pub struct LoudnessScan {
     pub true_peak_dbtp: f64,
 }
 
+/// Linear volume multiplier that moves `measured_lufs` up/down to
+/// `target_lufs` (the dB-ratio form, `10^((target - measured) / 20)`).
+///
+/// RadioDJ's bulk scanner stores `bs_loudness = ROUND(CalculateGain(measured), 2)`
+/// and playout applies that column verbatim as a linear `SetTrackVolume`
+/// (`APlayer.cs`), so the column is exactly a multiplier like this one. The
+/// original `LoudnessCalculator.CalculateGain` body is encrypted in the
+/// shipping binary (docs/06 §8), so this formula is a reconstruction from
+/// those column semantics, not verified original code.
+pub fn gain_to_target(measured_lufs: f64, target_lufs: f64) -> f64 {
+    10f64.powf((target_lufs - measured_lufs) / 20.0)
+}
+
 /// Scan an interleaved stereo buffer (what the library stores per file).
 pub fn scan(buf: &[f32], rate: f64) -> LoudnessScan {
     let mut m = LoudnessMeter::new(rate);
@@ -549,5 +562,16 @@ mod tests {
         let s = scan(&buf, 44100.0);
         assert!(s.integrated_lufs.is_some());
         assert!(s.true_peak_dbtp < 0.0);
+    }
+
+    #[test]
+    fn gain_to_target_matches_db_ratio() {
+        // At the target the multiplier is unity; 10 dB below target needs
+        // ~3.162x amplitude.
+        assert!((gain_to_target(-12.0, -12.0) - 1.0).abs() < 1e-12);
+        // -22 LUFS nudged to -12 LUFS is +10 dB: 10^(10/20) ~= 3.162.
+        assert!((gain_to_target(-22.0, -12.0) - 10f64.powf(0.5)).abs() < 1e-9);
+        // Louder than target pulls down.
+        assert!((gain_to_target(-2.0, -12.0) - 10f64.powf(-0.5)).abs() < 1e-9);
     }
 }

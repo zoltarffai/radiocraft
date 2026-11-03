@@ -404,6 +404,38 @@ pub async fn update_song(pool: &MySqlPool, s: &Song) -> Result<u64> {
     Ok(res.rows_affected())
 }
 
+/// Loudness-scan write for one row (FormLoudnessCalculator's UPDATE):
+/// measured BS.1770 LUFS and the derived linear gain multiplier, both
+/// rounded to 2 places the way `Math.Round(x, 2)` stores them.
+pub async fn update_song_loudness(
+    pool: &MySqlPool,
+    id: u32,
+    bs1770: Decimal,
+    bs_loudness: Decimal,
+) -> Result<u64> {
+    Ok(
+        sqlx::query("UPDATE songs SET bs1770 = ?, bs_loudness = ? WHERE ID = ?")
+            .bind(bs1770)
+            .bind(bs_loudness)
+            .bind(id)
+            .execute(pool)
+            .await?
+            .rows_affected(),
+    )
+}
+
+/// Reset the loudness columns to "no change" multipliers, verbatim the SQL
+/// RadioDJ's FormLoudnessCalculator runs in reset mode (`ResetLoudness`).
+pub async fn reset_loudness(pool: &MySqlPool) -> Result<u64> {
+    Ok(sqlx::query(
+        "UPDATE `songs` SET `loudness` = 1.000, `bs_loudness` = 1.000, `bs1770` = 0.000 \
+         WHERE song_type IN (0,1,2,3) AND enabled = 1",
+    )
+    .execute(pool)
+    .await?
+    .rows_affected())
+}
+
 pub async fn delete_song(pool: &MySqlPool, id: u32) -> Result<u64> {
     Ok(sqlx::query("DELETE FROM songs WHERE ID = ?")
         .bind(id)

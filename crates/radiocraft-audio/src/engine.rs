@@ -509,8 +509,11 @@ impl PlayoutEngine {
     // ---- library scanning: loudness + waveform -------------------------------
 
     /// Decode `path` and compute BS.1770-4 integrated loudness + true peak.
-    /// Feeds `SongData.bs1770` (integrated LUFS) and `SongData.loudness`
-    /// (true-peak dBTP).
+    /// The integrated LUFS feeds the library's `bs1770` column; the linear
+    /// multiplier columns `bs_loudness` / `loudness` are derived from it via
+    /// [`crate::loudness::gain_to_target`] (see docs/06 §8 for the RadioDJ
+    /// column semantics). True peak is informational here; RadioDJ's bulk
+    /// scanner only writes `bs1770` and `bs_loudness`.
     pub fn scan_loudness(&self, path: &Path) -> Result<LoudnessScan> {
         let mut src = FileSource::open(path)?;
         let mut meter = crate::loudness::LoudnessMeter::new(crate::SAMPLE_RATE as f64);

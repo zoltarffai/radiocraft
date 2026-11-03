@@ -476,14 +476,29 @@ loudness — canonical EBU K-weighting coefficients, 400 ms non-overlapping
 blocks, −70 LUFS absolute + −10 LU relative gates, LU offset −0.691 — plus
 4× oversampled 32-tap true peak; unit-tested against reference values. Same
 standard as bassloud, stricter measurement (bassloud's internals are closed).
-Integration gaps found (open work, NOT claimed faithful): `engine.rs::
-scan_loudness` has zero callers — no scan path populates the columns;
-`use_bs_loudness`/`bs_target` (defaults `true`/`−12`, matching the live
-RadioDJ config) are parsed from settings but have no playout consumers; there
-is no `CalculateGain` equivalent and core `SongData` lacks a `bs_loudness`
-field (DB entity has it); and the `scan_loudness` doc mapping (`loudness` ←
-true-peak dBTP) conflicts with RadioDJ, where `loudness`/`bs_loudness` are
-linear multipliers — revisit the column mapping before wiring the scan in.
+Integration (done, 2026-11-03): the gaps above are wired end-to-end —
+- `dispatch.rs` gained a `scan_loudness` command mirroring the bulk scan:
+  explicit `songIds` or a sweep of `WHERE bs1770 = 0.000` (same filter as
+  `FormLoudnessCalculator`, minus its `enabled=1` clause), `reset: true`
+  runs the same statement/row filter as RadioDJ's `button2_Click` reset,
+  target comes from the `bs_target()` setting (or a `target` arg), and the
+  busy-guard + progress share the `analyze_tracks` slot. It writes
+  `bs1770 = ROUND(measured,2)` and `bs_loudness = ROUND(gain,2)` via
+  `update_song_loudness`; the `loudness` column keeps its DDL default 1.0
+  on rows never scanned.
+- playout applies the gain: `playback.rs::track_gain_from_values` selects
+  `bs_loudness` vs `loudness` per the `use_bs_loudness` setting (exposed
+  over IPC as `general.use_bs_loudness`), guards the unscanned 0.000
+  default to 1.0 (RadioDJ relies on its reset having rewritten rows; we
+  never mutate untouched rows), and the multiplier rides on
+  `NowPlaying.gain_lin` / `AuxTrack.gain_lin` into
+  `PlayRequest::with_track_gain_lin` for every play path: `start`,
+  `play_cart`, `play_instant`, aux loads, and the plugin-host
+  segment-restart re-cue.
+- `radiocraft_audio::loudness::gain_to_target` is our (inferred-form)
+  multiplier derivation from the target/measured dB ratio; `SongData`
+  gained `bs_loudness`; the `scan_loudness` doc now states the correct
+  column semantics.
 (Plugin_SoundProcessing FX keys/defaults were verified in `4317b15`.)
 
 ## 9. Live smoke infrastructure (recreate if needed)

@@ -19,7 +19,7 @@ use radiocraft_db::entities::{LibraryFilter, LibrarySort, NewSong};
 use crate::frames::Frame;
 use crate::playback::{
     CueKnobs, build_cue_times, cue_tokens_from, knobs_from_song, request_for_file,
-    request_for_source, split_stem,
+    request_for_source, split_stem, track_gain_for,
 };
 use crate::state::{App, NowPlaying, Status, parse_zone, zone_name};
 
@@ -392,6 +392,66 @@ async fn run(app: &Arc<App>, op: &str, args: &Value) -> Result<Value> {
                 let _ = app.tx.send(Frame::Result {
                     id: 0,
                     op: "analyze_tracks".into(),
+                    data: report,
+                });
+            });
+            Ok(json!({ "started": total }))
+        }
+
+        // ---- loudness scan (Plugin_Utilities FormLoudnessCalculator) ----------
+        "scan_loudness" => {
+            let db = app.require_db().await?;
+            // "Reset loudness values" button: restore the factory rows
+            // (loudness=1.000, bs_loudness=1.000, bs1770=0.000).
+            if args.get("reset").and_then(Value::as_bool).unwrap_or(false) {
+                let rows = radiocraft_db::entities::reset_loudness(db.pool()).await?;
+                return Ok(json!({ "reset": rows }));
+            }
+            // BSTarget from settings_general.xml unless overridden.
+            let target = args
+                .get("target")
+                .and_then(Value::as_f64)
+                .unwrap_or(f64::from(
+                    *app.general.read().expect("general lock").bs_target(),
+                ));
+            // Selected rows: explicit ids. Otherwise the bulk scan's sweep:
+            // rows never scanned (bs1770 = 0.000, the schema default).
+            let ids: Vec<u32> = match args.get("songIds") {
+                Some(Value::Array(items)) => items
+                    .iter()
+                    .map(|v| {
+                        v.as_u64()
+                            .map(|v| u32::try_from(v).ok())
+                            .ok_or_else(|| anyhow!("songIds must be positive ids"))
+                            .and_then(|v| v.ok_or_else(|| anyhow!("songIds must be positive ids")))
+                    })
+                    .collect::<Result<Vec<u32>>>()?,
+                _ => {
+                    sqlx::query_scalar::<_, u32>("SELECT `ID` FROM `songs` WHERE `bs1770` = 0.000")
+                        .fetch_all(db.pool())
+                        .await?
+                }
+            };
+            // Same single-sweep rule as analyze_tracks: decoding can run for
+            // minutes while the transport keeps working.
+            if app
+                .analyze_busy
+                .swap(true, std::sync::atomic::Ordering::SeqCst)
+            {
+                anyhow::bail!("loudness scan already running");
+            }
+            let total = ids.len() as u64;
+            let app = Arc::clone(app);
+            tokio::spawn(async move {
+                let report = loudness_sweep(&app, &db, &ids, target).await;
+                app.analyze_busy
+                    .store(false, std::sync::atomic::Ordering::SeqCst);
+                if let Some(status) = report["status"].as_str() {
+                    app.set_status(Status::info(status)).await;
+                }
+                let _ = app.tx.send(Frame::Result {
+                    id: 0,
+                    op: "scan_loudness".into(),
                     data: report,
                 });
             });
@@ -814,6 +874,7 @@ async fn start(app: &Arc<App>, args: &Value, follow: bool) -> Result<Value> {
         if let Some(patch) = &patch {
             knobs = knobs.merge(patch);
         }
+        let gain_lin = track_gain_for(&song, &app.general.read().expect("general lock"));
         let playing = NowPlaying {
             song_id: i64::from(song.ID),
             artist: song.artist.clone(),
@@ -828,6 +889,7 @@ async fn start(app: &Arc<App>, args: &Value, follow: bool) -> Result<Value> {
             cue_end: knobs.end,
             fade_in_ms: knobs.fade_in_ms,
             fade_out_ms: knobs.fade_out_ms,
+            gain_lin,
         };
         (raw_path, playing)
     } else if let Some(raw) = args.get("path").and_then(Value::as_str) {
@@ -853,6 +915,7 @@ async fn start(app: &Arc<App>, args: &Value, follow: bool) -> Result<Value> {
                 cue_end: 0.0,
                 fade_in_ms: 0,
                 fade_out_ms: 0,
+                gain_lin: 1.0,
             };
             (raw.to_string(), playing)
         } else {
@@ -879,6 +942,7 @@ async fn start(app: &Arc<App>, args: &Value, follow: bool) -> Result<Value> {
                 cue_end: 0.0,
                 fade_in_ms: 0,
                 fade_out_ms: 0,
+                gain_lin: 1.0,
             };
             (raw.to_string(), playing)
         }
@@ -889,9 +953,11 @@ async fn start(app: &Arc<App>, args: &Value, follow: bool) -> Result<Value> {
     // Opening a stream fetches the HTTP header on this (blocking) thread,
     // never a Tokio worker.
     let knobs = cue_knobs_of(&playing, patch.as_ref());
-    let (req, duration) = tokio::task::spawn_blocking(move || request_for_source(&raw_path, &knobs))
+    let (mut req, duration) =
+        tokio::task::spawn_blocking(move || request_for_source(&raw_path, &knobs))
         .await
         .context("open source thread join")??;
+    req.track_gain_lin = playing.gain_lin;
     playing.duration_secs = duration;
 
     let plan = cue_knobs_of(&playing, None).plan();
@@ -964,10 +1030,13 @@ async fn play_cart(app: &Arc<App>, args: &Value) -> Result<Value> {
     .await?;
 
     let knobs = knobs_from_song(&song);
+    let gain_lin = track_gain_for(&song, &app.general.read().expect("general lock"));
     let (raw_path, knobs) = (song.path.clone(), knobs);
-    let (req, duration) = tokio::task::spawn_blocking(move || request_for_source(&raw_path, &knobs))
+    let (mut req, duration) =
+        tokio::task::spawn_blocking(move || request_for_source(&raw_path, &knobs))
         .await
         .context("open source thread join")??;
+    req.track_gain_lin = gain_lin;
     app.engine
         .play(Zone::Cart, req, i32::from(song.song_type), song.overlay)?;
     let cart = crate::state::CartNow {
@@ -1044,10 +1113,13 @@ async fn play_instant(app: &Arc<App>, args: &Value) -> Result<Value> {
     .await?;
 
     let knobs = knobs_from_song(&song);
+    let gain_lin = track_gain_for(&song, &app.general.read().expect("general lock"));
     let (raw_path, knobs) = (song.path.clone(), knobs);
-    let (req, duration) = tokio::task::spawn_blocking(move || request_for_source(&raw_path, &knobs))
+    let (mut req, duration) =
+        tokio::task::spawn_blocking(move || request_for_source(&raw_path, &knobs))
         .await
         .context("open source thread join")??;
+    req.track_gain_lin = gain_lin;
     app.engine
         .play(Zone::Instant, req, i32::from(song.song_type), song.overlay)?;
     let instant = crate::state::CartNow {
@@ -1191,20 +1263,29 @@ pub fn arg_str(args: &Value, key: &str) -> Result<String> {
 
 pub(crate) fn arg_f64(args: &Value, key: &str) -> Result<f64> {
     args.get(key)
-        .and_then(|v| v.as_f64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
+        .and_then(|v| {
+            v.as_f64()
+                .or_else(|| v.as_str().and_then(|s| s.parse().ok()))
+        })
         .ok_or_else(|| anyhow!("missing numeric arg {key}"))
 }
 
 pub fn arg_u32(args: &Value, key: &str) -> Result<u32> {
     args.get(key)
-        .and_then(|v| v.as_u64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
+        .and_then(|v| {
+            v.as_u64()
+                .or_else(|| v.as_str().and_then(|s| s.parse().ok()))
+        })
         .map(|v| v as u32)
         .ok_or_else(|| anyhow!("missing numeric arg {key}"))
 }
 
 fn arg_i32(args: &Value, key: &str, default: i32) -> i32 {
     args.get(key)
-        .and_then(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
+        .and_then(|v| {
+            v.as_i64()
+                .or_else(|| v.as_str().and_then(|s| s.parse().ok()))
+        })
         .map(|v| v as i32)
         .unwrap_or(default)
 }
@@ -1300,6 +1381,113 @@ fn decimal_from_f64(v: f64) -> Decimal {
     // 5 places. Matching that keeps e.g. 6.99984073638916 -> 6.99984 instead
     // of pre-rounding to 3 places (which would give 7.00000).
     Decimal::from_str(&crate::playback::format_f64(v)).unwrap_or(Decimal::ZERO)
+}
+
+/// Loudness values are stored DECIMAL(10,3) but RadioDJ's scanner writes
+/// ROUND(x, 2); match the 2-place rounding, including negative LUFS values
+/// (`decimal_from_f64` clamps at zero, which would corrupt -16.23).
+fn decimal_round2(v: f64) -> Decimal {
+    let scaled = (v * 100.0).round();
+    Decimal::new(scaled as i64, 2)
+}
+
+// ---- loudness sweep (Plugin_Utilities FormLoudnessCalculator) -----------------
+
+/// Decode every id, measure integrated BS.1770-4 loudness, and write the
+/// row's `bs1770` (measured LUFS) plus `bs_loudness` (linear multiplier
+/// toward `target` = BSTarget), both rounded to 2 places like RadioDJ's
+/// scanner SQL. The dB-ratio multiplier is our reconstruction, not
+/// verified RadioDJ math (docs/06 §8).
+async fn loudness_sweep(app: &App, db: &radiocraft_db::Db, ids: &[u32], target: f64) -> Value {
+    let total = ids.len();
+    let mut scanned = 0usize;
+    let mut skipped = 0usize;
+    let mut errors: Vec<String> = Vec::new();
+    for (n, id) in ids.iter().enumerate() {
+        let Some(song) = (match radiocraft_db::entities::song_by_id(db.pool(), *id).await {
+            Ok(song) => song,
+            Err(e) => {
+                errors.push(format!("id {id}: {e}"));
+                skipped += 1;
+                continue;
+            }
+        }) else {
+            skipped += 1;
+            continue;
+        };
+        // Same skip rules as the analyze sweep: types 5,8,9,11,12,13 and
+        // missing files are never touched by the scanner either.
+        if matches!(song.song_type, 5 | 8 | 9 | 11 | 12 | 13)
+            || song.path.is_empty()
+            || !std::path::Path::new(&song.path).is_file()
+        {
+            skipped += 1;
+            continue;
+        }
+        app.set_status(Status::info(format!(
+            "Scanning loudness {}/{total}: {}",
+            n + 1,
+            song.path
+        )))
+        .await;
+        let path = std::path::PathBuf::from(&song.path);
+        let integrated = match tokio::task::spawn_blocking(move || {
+            use radiocraft_audio::decoder::{FileSource, Source as _};
+            let mut src = FileSource::open(&path)?;
+            let mut meter = radiocraft_audio::loudness::LoudnessMeter::new(
+                radiocraft_audio::SAMPLE_RATE as f64,
+            );
+            let mut buf = vec![0.0f32; 8192 * 2];
+            loop {
+                let frames = src.read(&mut buf);
+                if frames == 0 {
+                    break;
+                }
+                meter.observe_buffer(&buf[..frames * 2]);
+            }
+            Ok::<_, anyhow::Error>(meter.integrated())
+        })
+        .await
+        {
+            Ok(Ok(lufs)) => lufs,
+            Ok(Err(e)) => {
+                errors.push(format!("{}: {e}", song.path));
+                skipped += 1;
+                continue;
+            }
+            Err(e) => {
+                errors.push(format!("{}: {e}", song.path));
+                skipped += 1;
+                continue;
+            }
+        };
+        let Some(lufs) = integrated else {
+            // Fully gated-out (silent) file: the row keeps its defaults.
+            skipped += 1;
+            continue;
+        };
+        let gain = radiocraft_audio::loudness::gain_to_target(lufs, target);
+        if let Err(e) = radiocraft_db::entities::update_song_loudness(
+            db.pool(),
+            *id,
+            decimal_round2(lufs),
+            decimal_round2(gain),
+        )
+        .await
+        {
+            errors.push(format!("{}: save failed: {e}", song.path));
+            skipped += 1;
+            continue;
+        }
+        scanned += 1;
+    }
+    json!({
+        "scanned": scanned,
+        "skipped": skipped,
+        "total": total,
+        "errors": errors,
+        "status": format!("Loudness analyzis completed! ({scanned} scanned, {skipped} skipped)"),
+    })
 }
 
 // ---- booking -------------------------------------------------------------------
@@ -1624,6 +1812,17 @@ mod tests {
             Frame::Result { data, .. } => assert_eq!(data["value"], json!("RC")),
             other => panic!("{other:?}"),
         }
+    }
+
+    #[test]
+    fn decimal_round2_handles_signed_loudness() {
+        // bs1770 stores negative LUFS; bs_loudness keeps 2 places.
+        assert_eq!(
+            decimal_round2(-23.456),
+            "-23.46".parse::<Decimal>().unwrap()
+        );
+        assert_eq!(decimal_round2(1.2349), "1.23".parse::<Decimal>().unwrap());
+        assert_eq!(decimal_round2(-0.004), "0.00".parse::<Decimal>().unwrap());
     }
 
     #[tokio::test]
