@@ -330,6 +330,12 @@ Still open:
    name the domain field `GLIB_DOMAIN`, not `DOMAIN` — matching only `DOMAIN` silently
    matches nothing. Verified live on the host X session: stderr is now completely clean
    at startup and on window close, exit stays clean, clippy clean.
+2. Loudness web surface: `scan_loudness` and the `UseBSLoudness`/`BSTarget` settings are
+   backend-only (ops verified live over WS, §9 loudness smoke). The web UI has no
+   loudness-scan button/report and no Options toggle for these two settings; the
+   `web/src/lib/protocol.ts` IPC mirror also lacks the op + setting entries. RadioDJ's
+   equivalent UI is the `Plugin_AuxPlayers`-shipped FormLoudnessCalculator window +
+   Options checkbox.
 
 Packaging for the shell is now closed (`80ff7a2`): `scripts/package-linux.sh` builds
 `RadioCraft_0.2.0_amd64.deb` + `RadioCraft-0.2.0-1.x86_64.rpm` in the `localhost/rc-tauri`
@@ -481,7 +487,8 @@ loudness — canonical EBU K-weighting coefficients, 400 ms non-overlapping
 blocks, −70 LUFS absolute + −10 LU relative gates, LU offset −0.691 — plus
 4× oversampled 32-tap true peak; unit-tested against reference values. Same
 standard as bassloud, stricter measurement (bassloud's internals are closed).
-Integration (done, 2026-11-03): the gaps above are wired end-to-end —
+Integration (done, 2026-11-03, live-verified end-to-end via §9 loudness smoke):
+the gaps above are wired end-to-end —
 - `dispatch.rs` gained a `scan_loudness` command mirroring the bulk scan:
   explicit `songIds` or a sweep of `WHERE bs1770 = 0.000` (same filter as
   `FormLoudnessCalculator`, minus its `enabled=1` clause), `reset: true`
@@ -509,10 +516,18 @@ Integration (done, 2026-11-03): the gaps above are wired end-to-end —
 ## 9. Live smoke infrastructure (recreate if needed)
 
 - MariaDB: `mariadbd` on `127.0.0.1:3306`, datadir `/tmp/opencode/mdb/data`, socket
-  `/tmp/opencode/mdb/my.sock`, root/changeme, DB `radiodj3` (dbVersion=2006); test song ID 1 =
-  6 s 440 Hz tone at `/tmp/opencode/smoke-audio/testtone.wav`. Start (if gone):
-  `mariadbd --datadir=/tmp/opencode/mdb/data --socket=/tmp/opencode/mdb/my.sock -P 3306 -b`
-  (binaries via system mariadb), then UI `Connect` or `db_configure`+`db_connect`.
+  `/tmp/opencode/mdb/my.sock`, root/changeme, DB `radiodj3` (dbVersion=2006); test songs
+  ID 1/2 = 6 s 440 Hz tones at `/tmp/opencode/smoke-audio/testtone{,2}.wav` (paths must
+  differ: `idx_path` is unique). Start (if gone):
+  `nohup mariadbd --datadir=/tmp/opencode/mdb/data --socket=/tmp/opencode/mdb/my.sock
+  -P 3306 --bind-address=127.0.0.1 --pid-file=/tmp/opencode/mdb/mariadb.pid &` — this
+  host's MariaDB has no `-b`/`--daemonize` and the default pid path `/run/mariadb` is
+  not user-writable. Recreate the DB: `CREATE DATABASE radiodj3` + load
+  `crates/radiocraft-db/schema/database.sql`, then stamp
+  `INSERT INTO settings (source,setting,value) VALUES ('settings_database','dbVersion','2006')`
+  — `db_connect` rejects an unstamped schema with `NotBootstrapped`. Seed `songs` rows with
+  `SET SESSION sql_mode=''` (several NOT NULL columns have no DDL default). Then UI
+  `Connect` or `db_configure`+`db_connect`.
 - Smoke server: `./target/debug/radiocraft-server /tmp/opencode/rc-smoke &` (config dir has
   `settings_database.xml` + DB settings), pid file `/tmp/opencode/rc-smoke.pid`, log
   `/tmp/opencode/rc-smoke.log`. Kill precisely: `ps -eo pid,cmd | grep radiocraft-server`
@@ -524,7 +539,12 @@ Integration (done, 2026-11-03): the gaps above are wired end-to-end —
   docker.io/library/fedora:44 bash -c "dnf -y install -q xdotool; xdotool search --class
   radiocraft; xdotool windowclose $W"` (xauth file name under `/run/user/1000/` rotates).
   Screenshot attempts failed (`magick import` unusable, `spectacle -rbn` non-interactive
-  hangs); verify via `ss -tnp state established '( dport = :8030 )'` instead.
+  hangs); verify via `ss -tnp state established '( dport = :8030 )'` instead. Native host
+  build (since the §7 native deps): plain `DISPLAY=:0 WAYLAND_DISPLAY= GDK_BACKEND=x11
+  ./target/debug/radiocraft-window` works — window confirmed via `wmctrl -lx` (class
+  `radiocraft-window.Radiocraft-window`, title "RadioCraft"), webview WS connections
+  visible via `ss`, and SIGTERM shutdown leaves stderr completely clean (GLib
+  writer-func fix re-verified natively on the host, not just container-built).
 - WS CLI smoke: `python3` one-liners against the wire (remember `args` nesting). Node
   scripts: `/tmp/opencode/rc-autodj-smoke.mjs` (AutoDJ ops) and
   `/tmp/opencode/rc-rotation-smoke.mjs` (rotation/criteria editor round trip incl.
@@ -566,6 +586,16 @@ Integration (done, 2026-11-03): the gaps above are wired end-to-end —
   snapshots (position 0 at play start); live positions ride the 20 Hz `meters`
   frames. Careful reading `library_add` results: the reply key is `songId` — the
   top-level `id` is the command id.
+- Loudness smoke (`/tmp/opencode/rc-loudness-smoke.py [target]`, against the main
+  `:8030` smoke server + `radiodj3`): hello → `sub` (top-level frame, not a cmd op) →
+  db connect → `set_setting UseBSLoudness` → `scan_loudness {songIds:[1], target}`
+  (reply `{started:N}`, then id-0 `scan_loudness` broadcast) → plays songs 1 and 2 and
+  samples the 20 Hz `meters` frames (`master.peak_hold_db` — levels nest under
+  `master`, not flat). Verified numbers: the 0.5-amplitude 440 Hz tone measures
+  `bs1770 = -6.700`, target −22 → `bs_loudness = 0.170`; play level delta song1 vs
+  song2 (unscanned row, guard → gain 1.0) = −15.39 dB vs predicted 20·log10(0.170) =
+  −15.40; the absolute offset matches the master fader (−7.96 dB); `scan_loudness
+  {reset:true}` restores `1.000/1.000/0.000` on both rows.
 
 ## 10. Toolchain / environment quirks (hard-won)
 
