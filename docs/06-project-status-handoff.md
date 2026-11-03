@@ -216,7 +216,7 @@ RadioDJ `cue_times` DB string: `&sta= &int= &pin=/&pou= &hin=/&hou= &out= &xta= 
 ## 7. Build & verification infrastructure
 
 - Host: Nobara 44 (KDE Plasma, Wayland + X11 `:0`), glibc 2.43, 16 CPU/14 GB (do release
-  builds sequentially), **no sudo**. Node v24.22.2 / npm 11.19.1. `export PATH=$HOME/.cargo/bin:$PATH`.
+  builds sequentially), sudo requires a password. Node v24.22.2 / npm 11.19.1. `export PATH=$HOME/.cargo/bin:$PATH`.
 - **podman** (docker absent). Images: `localhost/manyrust` (AlmaLinux 8.10, glibc 2.28, for
   AppImage), `localhost/rc-tauri` (built from `.github/Dockerfile.fedora-tauri`, fedora:44 +
   webkit2gtk4.1/gtk3/libappindicator-gtk3/librsvg2/alsa-lib devel + cargo-clippy + nodejs +
@@ -235,8 +235,13 @@ RadioDJ `cue_times` DB string: `&sta= &int= &pin=/&pou= &hin=/&hou= &out= &xta= 
   libayatana-appindicator3-dev librsvg2-dev`) → `cargo test --workspace` +
   `cargo clippy --workspace --all-targets -- -D warnings`; `appimage` job builds web then
   `CONTAINER=docker IMAGE=manyrust bash scripts/build-appimage.sh`.
-- On a dev box without WebKitGTK devel packages: `--exclude radiocraft-window` for
-  test/clippy (documented in docs/05).
+- Host now has the native window toolchain (2026-11-03: `dbus-devel clang
+  glib2-devel gtk3-devel webkit2gtk4.1-devel libappindicator-gtk3-devel
+  librsvg2-devel` installed via sudo dnf), so `cargo build/test/clippy
+  --workspace` pass on the host without exclusions. On a box without those
+  packages fall back to `--exclude radiocraft-window` for test/clippy
+  (documented in docs/05). sudo still requires a password (no passwordless
+  sudo).
 - Packaging gotchas: linuxdeploy corrupts musl static binaries → manylinux glibc-dynamic only;
   `APPIMAGE_EXTRACT_AND_RUN=1` in containers.
 - deb/rpm bundles: `bash scripts/package-linux.sh` (builds server + web on host, stages a
