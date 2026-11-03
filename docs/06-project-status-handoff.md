@@ -444,8 +444,47 @@ TLS1.2+classic-kx / native-tls matrix). Build note: OpenSSL linkage needs
 Live check: server log shows `stream …: host rejected rustls, retrying via OpenSSL`
 and main-zone `position_secs` keeps climbing across 90+ s of a live broadcast.
 
-Deferred fidelity checks (optional): cross-check `LoudnessCalculator.cs`. (Plugin_SoundProcessing
-FX keys/defaults were verified against the decompiles in `4317b15`.)
+Fidelity check complete (this commit): `LoudnessCalculator.cs` cross-checked
+against `radiocraft-audio::loudness`, using the decompile plus the real install
+(`PluginInterface.dll`, `lib/bassloud.dll`, live `settings_general.xml`).
+Verified: RadioDJ's loudness scan is the BASS `bassloud` add-on
+(`BASS_Loudness_Start/SetChannel/GetLevel/GetLevelMulti`; per un4seen docs the
+measurement is ITU-R BS.1770-4 — INTEGRATED is gated, CURRENT = 400 ms blocks,
+PEAK/TRUEPEAK returned on a linear scale). The bulk scan
+(`FormLoudnessCalculator`) selects `WHERE bs1770=0.000` and writes
+`bs1770 = ROUND(measured,2)` (raw measurement) and
+`bs_loudness = ROUND(CalculateGain(measured),2)`; its reset writes
+`loudness=1.000, bs_loudness=1.000, bs1770=0.000` — so `loudness`/`bs_loudness`
+hold **linear volume multipliers** (idle value 1.0), confirmed by playout:
+`SetTrackVolume = BSLoudness` when `Vars.UseBSLoudness` else `Loudness`
+(readable in `Plugin_AuxPlayers/APlayer.cs`; core has the same wrapper quartet
+`GetLoudness`/`BS1770=`/`CalculateGain`/`Loudness=` but its call sites sit in
+flattened control flow). Settings involved: `UseBSLoudness`, `BSTarget` — the
+live user config has `True`/`−12`; the factory default was never recoverable
+(wiki page is a PRO-version stub, forum threads inconclusive). The exact
+`CalculateGain` math is NOT recoverable statically: the obfuscator encrypts
+method bodies at rest — confirmed by parsing the real `PluginInterface.dll`
+(SHA 7ac3ff21…): method-body RVAs land inside the first section but the bytes
+there are random (the text decompile's "Invalid method header"). Any concrete
+formula (e.g. `10^((target−measured)/20)`) is inference, not fact. Earlier
+draft claims here (target −16, `AutoDJTargetLoudness`,
+`LoudnessScan::normalize_gain`, `TargetLoudness::NORMALIZE_TARGET`) matched no
+symbol in either the decompile or our crates and are removed.
+
+Our side (`radiocraft-audio::loudness`): full ITU-R BS.1770-4 integrated
+loudness — canonical EBU K-weighting coefficients, 400 ms non-overlapping
+blocks, −70 LUFS absolute + −10 LU relative gates, LU offset −0.691 — plus
+4× oversampled 32-tap true peak; unit-tested against reference values. Same
+standard as bassloud, stricter measurement (bassloud's internals are closed).
+Integration gaps found (open work, NOT claimed faithful): `engine.rs::
+scan_loudness` has zero callers — no scan path populates the columns;
+`use_bs_loudness`/`bs_target` (defaults `true`/`−12`, matching the live
+RadioDJ config) are parsed from settings but have no playout consumers; there
+is no `CalculateGain` equivalent and core `SongData` lacks a `bs_loudness`
+field (DB entity has it); and the `scan_loudness` doc mapping (`loudness` ←
+true-peak dBTP) conflicts with RadioDJ, where `loudness`/`bs_loudness` are
+linear multipliers — revisit the column mapping before wiring the scan in.
+(Plugin_SoundProcessing FX keys/defaults were verified in `4317b15`.)
 
 ## 9. Live smoke infrastructure (recreate if needed)
 
