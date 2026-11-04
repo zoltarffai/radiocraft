@@ -25,14 +25,18 @@ tar -C "$ROOT" --exclude=.git --exclude=target --exclude=out -cf - . | tar -C "$
       else echo "npm not found; expecting pre-built web/dist" >&2; test -d dist || exit 1; fi
     fi )
   appdir=/src/out/radiocraft.AppDir
-  mkdir -p "$appdir/usr/bin" "$appdir/usr/share/applications" "$appdir/usr/share/radiocraft/web"
+  # Web assets go under <bindir>/../lib/RadioCraft/web/dist, one of the
+  # exe-relative fallbacks the server itself resolves (see main.rs), so the
+  # desktop Exec can name the binary directly — linuxdeploy rejects an Exec
+  # whose argv0 (`sh`) has no matching executable in the AppDir.
+  mkdir -p "$appdir/usr/bin" "$appdir/usr/share/applications" "$appdir/usr/lib/RadioCraft/web/dist"
   cp target/release/radiocraft-server "$appdir/usr/bin/radiocraft-server"
-  cp -r web/dist/. "$appdir/usr/share/radiocraft/web/"
+  cp -r web/dist/. "$appdir/usr/lib/RadioCraft/web/dist/"
   cat > "$appdir/radiocraft.desktop" <<EOF
 [Desktop Entry]
 Type=Application
 Name=RadioCraft
-Exec=sh -c "RADIOCRAFT_WEB_DIST=\$APPDIR/../share/radiocraft/web exec radiocraft-server"
+Exec=radiocraft-server
 Icon=radiocraft
 Terminal=false
 Categories=AudioVideo;Audio;
