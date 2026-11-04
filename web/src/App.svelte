@@ -49,23 +49,24 @@
 
 <style>
   /* RadioDJ-style shell:
-     ├──────────────1──────────────┤
-     ├────┬──────┬──────────┬──────┤
-     │    │  2   │    4     │  5   │
-     │  3 ├──────┼──────────┤      │
-     │    │      │    6     │      │
-     ├────┴──────┴──────────┴──────┤
-     ├──────────────7──────────────┤
+     ├─────────────────1─────────────────┤
+     ├─────────────┬─────┬───────────────┤
+     │      2      │  3  │       4       │
+     ├─────────────┴─────┼───────────────┤
+     │          5        │       6       │
+     ├─────────────────7─────────────────┤
+     Left half = 5 (full width of half); 2+3 above it,
+     with 3 = 10 % of the 2+3 band, right of 2.
   */
   .rjdj {
     display: grid;
-    grid-template-columns: 170px minmax(280px, 0.9fr) minmax(420px, 1.35fr) minmax(320px, 1fr);
-    grid-template-rows: auto minmax(280px, 1.15fr) minmax(220px, 0.85fr) auto;
+    grid-template-columns: minmax(280px, 45fr) minmax(110px, 5fr) minmax(340px, 50fr);
+    grid-template-rows: auto minmax(240px, 1.1fr) minmax(240px, 1fr) auto;
     grid-template-areas:
-      "s1 s1 s1 s1"
-      "s3 s2 s4 s5"
-      "s3 s2 s6 s5"
-      "s7 s7 s7 s7";
+      "s1 s1 s1"
+      "s2 s3 s4"
+      "s5 s5 s6"
+      "s7 s7 s7";
     gap: 10px;
     padding: 10px;
     min-height: 100vh;
@@ -88,17 +89,10 @@
     overflow: auto;
   }
 
-  /* stack the narrow layout on smaller screens */
-  @media (max-width: 1280px) {
+  /* keep the proportions on smaller screens, just tighter minima */
+  @media (max-width: 1100px) {
     .rjdj {
-      grid-template-columns: 150px minmax(260px, 1fr) minmax(320px, 1.2fr);
-      grid-template-rows: auto minmax(260px, 1fr) minmax(220px, 1fr) minmax(200px, 0.8fr) auto;
-      grid-template-areas:
-        "s1 s1 s1"
-        "s3 s2 s4"
-        "s3 s5 s5"
-        "s3 s6 s6"
-        "s7 s7 s7";
+      grid-template-columns: minmax(220px, 44fr) minmax(92px, 6fr) minmax(280px, 50fr);
     }
   }
 
