@@ -61,7 +61,7 @@
   .rjdj {
     display: grid;
     grid-template-columns: minmax(280px, 45fr) minmax(110px, 5fr) minmax(340px, 50fr);
-    grid-template-rows: auto minmax(240px, 1.1fr) minmax(240px, 1fr) auto;
+    grid-template-rows: auto minmax(260px, 8fr) minmax(140px, 2fr) auto;
     grid-template-areas:
       "s1 s1 s1"
       "s2 s3 s4"
