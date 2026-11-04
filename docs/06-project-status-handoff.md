@@ -11,7 +11,7 @@ set, `Plugin_AuxPlayers` parity) + `34c7c7f` (web aux players panel),
 (stream smoke fixes), `11e4c45` (internet streams Type 5), `1b5c493`
 (cart-wall editor), `835a86f`+`1eb2ed4` (instant/cart-wall
 playback), `281a1bb` (cart wall CRUD), and the master FX commit `4317b15`.
-No tags exist yet; branch is `master`. This document is the
+No tags exist yet; branch is `main`. This document is the
 single source of truth for "where everything stands" when a fresh session
 starts. Read it together with:
 
