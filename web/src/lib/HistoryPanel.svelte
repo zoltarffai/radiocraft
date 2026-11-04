@@ -2,6 +2,9 @@
   import { session } from "./session.svelte";
   import type { HistoryRow } from "./protocol";
 
+  /** Optional: show the row's track on the "Show details" tab (section 5). */
+  let { showDetails }: { showDetails?: (songId: number) => void | Promise<void> } = $props();
+
   let needle = $state("");
   let loading = $state(false);
   let offset = $state(0);
@@ -86,6 +89,11 @@
             <td title={row.artist}>{row.artist}</td>
             <td title={row.title}>{row.title}</td>
             <td class="actions">
+              {#if showDetails && row.trackID}
+                <button title="Show details" onclick={() => void call(async () => showDetails?.(row.trackID))}>
+                  ℹ
+                </button>
+              {/if}
               <button title="Rewind this play" onclick={() => void call(() => session.playFromHistory(row.ID))}>
                 Rewind
               </button>

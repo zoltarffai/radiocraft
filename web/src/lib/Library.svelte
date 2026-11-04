@@ -359,6 +359,7 @@
               <button title="Play now" onclick={() => void play(song, false)}>▶</button>
               <button title="Cue next" onclick={() => void play(song, true)}>Cue</button>
               <button title="Add to play queue" onclick={() => void call(() => session.queueAddSong(song.ID))}>Queue</button>
+              <button title="Show details" onclick={() => void session.selectSong(song.ID)}>ℹ</button>
               <button title="Edit" onclick={() => void openEdit(song)}>Edit</button>
               <button class="danger" title="Delete" onclick={() => void removeOne(song)}>✕</button>
             </td>

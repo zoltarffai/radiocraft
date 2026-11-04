@@ -108,6 +108,10 @@ class Session {
   libraryTotal = $state(0);
   historyTotal = $state(0);
 
+  /** Track selected in search/history rows, shown on the "Show details" tab. */
+  selectedSongId = $state<number | null>(null);
+  selectedSong = $state<SongFull | null>(null);
+
   // ---- settings-editor state (list_devices / *_get / *_set ops) -------------
   /** Output device names from the audio backend. */
   devices = $state<string[]>([]);
@@ -359,6 +363,17 @@ class Session {
   async getSong(id: number): Promise<SongFull> {
     const r = await this.cmd<{ song: SongFull }>("library_get", { songId: id });
     return r.song;
+  }
+  /** Select a track for the "Show details" tab (RadioDJ's selected-track box). */
+  async selectSong(id: number): Promise<void> {
+    this.selectedSongId = id;
+    try {
+      this.selectedSong = await this.getSong(id);
+    } catch (e) {
+      this.selectedSongId = null;
+      this.selectedSong = null;
+      this.lastError = String(e);
+    }
   }
   updateSong(song: SongFull): Promise<unknown> {
     return this.cmd("library_update", { song });
