@@ -15,6 +15,9 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y libasound2-dev libx11-dev pkg-config libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev
       - name: Build web UI
         run: cd web && npm ci && npm run build
+      # cargo test builds workspace deps as rlibs only; the dylib plugin e2e
+      # test loads target/debug/libradiocraft_plugin_example.so, so build it.
+      - run: cargo build -p radiocraft-plugin-example
       - run: cargo test --workspace
       - run: cargo clippy --workspace --all-targets -- -D warnings
 
