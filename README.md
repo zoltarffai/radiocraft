@@ -1,5 +1,10 @@
 # RadioCraft
 
+Started this project because I wanted to run RadioDJ on Linux, and no one
+was having any success. I have since been able to get it working in a Bottle.
+I'm going to leave this here, and maybe pick it back up some day. If someone 
+else wants to continue this, go for it.
+
 A faithful rebuild of **RadioDJ v3.0.0.5** (Windows/.NET radio playout
 application) in Rust — reverse-engineered from the shipped binaries, bundled SQL
 scripts, manuals, and config files.
