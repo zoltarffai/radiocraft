@@ -93,6 +93,8 @@ pub fn op_sound_options_get(app: &Arc<App>) -> Result<Value> {
         "vol_overlay": *g.vol_overlay(),
         "vol_onsweeper": *g.vol_onsweeper(),
         "vol_vt": *g.vol_vt(),
+        "use_bs_loudness": *g.use_bs_loudness(),
+        "bs_target": *g.bs_target(),
     }))
 }
 
@@ -109,6 +111,17 @@ pub fn op_sound_options_set(app: &Arc<App>, args: &Value) -> Result<Value> {
         if let Some(v) = args.get(key).and_then(Value::as_i64) {
             app.set_general_setting(key, &v.to_string())?;
         }
+    }
+    // Loudness knobs keep the RadioDJ XML key spellings; the bool serialises
+    // in the C# `True`/`False` form the kvstore round-trips.
+    if let Some(v) = args.get("use_bs_loudness").and_then(Value::as_bool) {
+        app.set_general_setting("UseBSLoudness", if v { "True" } else { "False" })?;
+    }
+    if let Some(v) = args.get("bs_target").and_then(Value::as_i64) {
+        app.set_general_setting(
+            "BSTarget",
+            &v.clamp(i64::from(i32::MIN), i64::from(i32::MAX)).to_string(),
+        )?;
     }
     op_sound_options_get(app)
 }

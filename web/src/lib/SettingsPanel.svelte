@@ -224,8 +224,16 @@
             Voice-track level (dB)
             <input class="mono" type="number" value={so.vol_vt} onchange={(e) => setOption("vol_vt", e.currentTarget.value)} disabled={!online || busy} />
           </label>
+          <label>
+            Loudness target (dBFS)
+            <input class="mono" type="number" max="-1" value={so.bs_target} onchange={(e) => setOption("bs_target", e.currentTarget.value)} disabled={!online || busy} />
+          </label>
+          <label>
+            Gain from BS.1770
+            <input type="checkbox" checked={so.use_bs_loudness} onchange={(e) => void call(() => session.setSoundOptions({ use_bs_loudness: e.currentTarget.checked }))} disabled={!online || busy} />
+          </label>
         </div>
-        <p class="hint mono">volume_out / dur_fadeout / vol_overlay / vol_onsweeper / vol_vt — applied live</p>
+        <p class="hint mono">volume_out / dur_fadeout / vol_overlay / vol_onsweeper / vol_vt / bs_target — applied live</p>
       </div>
     {/if}
   {:else if tab === "fx"}

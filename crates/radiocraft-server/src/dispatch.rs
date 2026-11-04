@@ -414,6 +414,11 @@ async fn run(app: &Arc<App>, op: &str, args: &Value) -> Result<Value> {
                 .unwrap_or(f64::from(
                     *app.general.read().expect("general lock").bs_target(),
                 ));
+            // Guard the DECIMAL columns against a nonsense target: a
+            // positive dBFS "LUFS target" would store astronomic gains.
+            if !target.is_finite() || target >= 0.0 {
+                anyhow::bail!("loudness target must be a negative dBFS value");
+            }
             // Selected rows: explicit ids. Otherwise the bulk scan's sweep:
             // rows never scanned (bs1770 = 0.000, the schema default).
             let ids: Vec<u32> = match args.get("songIds") {

@@ -46,6 +46,30 @@
     return off;
   });
 
+  // Loudness scanner (Plugin_Utilities FormLoudnessCalculator): busy flag,
+  // completion report, and the row count the Reset button cleared.
+  let scanning = $state(false);
+  let loudnessReport = $state<LoudnessReport | null>(null);
+  let resetCount = $state<number | null>(null);
+
+  type LoudnessReport = {
+    scanned: number;
+    skipped: number;
+    total: number;
+    errors: string[];
+    status: string;
+  };
+
+  // Same background-job pattern as the analyze sweep above.
+  $effect(() => {
+    const off = session.onBroadcast("scan_loudness", (data) => {
+      scanning = false;
+      loudnessReport = data as unknown as LoudnessReport;
+      void search(false);
+    });
+    return off;
+  });
+
   const songs = $derived(session.songs);
   const total = $derived(session.libraryTotal);
   const ready = $derived(session.conn === "open" && session.dbConnected);
@@ -167,6 +191,34 @@
     } catch (e) {
       session.lastError = String(e);
       analyzing = false;
+    }
+  }
+
+  async function scanLoudness() {
+    if (scanning) return;
+    const scope = ids.length > 0 ? `${ids.length} selected track(s)` : "every unscanned track";
+    if (!window.confirm(`Measure BS.1770 loudness for ${scope}? Stored values are overwritten.`)) return;
+    scanning = true;
+    loudnessReport = null;
+    try {
+      // Reply only acknowledges the sweep started; the report lands via onBroadcast.
+      await session.cmd("scan_loudness", ids.length > 0 ? { songIds: ids } : {});
+    } catch (e) {
+      session.lastError = String(e);
+      scanning = false;
+    }
+  }
+
+  async function resetLoudness() {
+    if (scanning) return;
+    if (!window.confirm("Reset loudness values for all enabled library tracks to the factory defaults?")) return;
+    try {
+      const r = (await session.cmd("scan_loudness", { reset: true })) as { reset: number };
+      resetCount = r.reset;
+      loudnessReport = null;
+      await search(false);
+    } catch (e) {
+      session.lastError = String(e);
     }
   }
 
@@ -299,6 +351,28 @@
       <button class="link" onclick={() => (analyzeReport = null)}>dismiss</button>
     {:else}
       <span class="dim">level thresholds (defaults -24 / -5 / -30)</span>
+    {/if}
+  </div>
+
+  <div class="row analyze">
+    <span class="dim">loudness</span>
+    <button title="Measure BS.1770 loudness and compute playback gain (with selection: selected rows only; without: every unscanned row)" disabled={!ready || scanning} onclick={() => void scanLoudness()}>
+      {scanning ? "Scanning…" : "Scan loudness"}
+    </button>
+    <button title="Reset loudness values" disabled={!ready || scanning} onclick={() => void resetLoudness()}>Reset</button>
+    {#if scanning}
+      <span class="progress">{session.status.message}</span>
+    {:else if loudnessReport}
+      <span class="progress" title={loudnessReport.errors.join("\n")}>
+        {loudnessReport.scanned} scanned, {loudnessReport.skipped} skipped
+        {#if loudnessReport.errors.length > 0}(⚠ {loudnessReport.errors.length}){/if}
+      </span>
+      <button class="link" onclick={() => (loudnessReport = null)}>dismiss</button>
+    {:else if resetCount !== null}
+      <span class="progress">{resetCount} rows reset</span>
+      <button class="link" onclick={() => (resetCount = null)}>dismiss</button>
+    {:else}
+      <span class="dim">BS.1770 scan + gain (target from Sound options)</span>
     {/if}
   </div>
 

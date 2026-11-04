@@ -335,12 +335,19 @@ Still open:
    name the domain field `GLIB_DOMAIN`, not `DOMAIN` — matching only `DOMAIN` silently
    matches nothing. Verified live on the host X session: stderr is now completely clean
    at startup and on window close, exit stays clean, clippy clean.
-2. Loudness web surface: `scan_loudness` and the `UseBSLoudness`/`BSTarget` settings are
+2. ~~Loudness web surface: `scan_loudness` and the `UseBSLoudness`/`BSTarget` settings are
    backend-only (ops verified live over WS, §9 loudness smoke). The web UI has no
    loudness-scan button/report and no Options toggle for these two settings; the
    `web/src/lib/protocol.ts` IPC mirror also lacks the op + setting entries. RadioDJ's
    equivalent UI is the `Plugin_AuxPlayers`-shipped FormLoudnessCalculator window +
-   Options checkbox.
+   Options checkbox.~~ Closed (2026-11-04): `sound_options_get/set` gained
+   `use_bs_loudness`/`bs_target` (written as `UseBSLoudness`/`BSTarget` in
+   settings_general.xml, round-tripped through the engine); `scan_loudness` rejects a
+   non-negative target. `Library.svelte` gained a Scan loudness / Reset row mirroring
+   the analyze-tracks pattern (selection = selected rows, empty = unscanned sweep,
+   completion via the `scan_loudness` broadcast report); `SettingsPanel.svelte` Sound
+   options gained the BS.1770 target field + gain-source checkbox. Covered by
+   `tests/loudness_ops.rs` (live-db gated) and the extended `settings_ops.rs` test.
 
 Packaging for the shell is now closed (`80ff7a2`): `scripts/package-linux.sh` builds
 `RadioCraft_0.2.0_amd64.deb` + `RadioCraft-0.2.0-1.x86_64.rpm` in the `localhost/rc-tauri`

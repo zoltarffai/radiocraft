@@ -72,20 +72,30 @@ async fn soundcards_round_trip_and_device_ops() {
 async fn sound_options_set_persists_and_reraims_engine() {
     let app = tmp_app();
     let got = result_of(
-        call(&app, "sound_options_set", json!({"dur_fadeout": 4200, "vol_overlay": 7})).await,
+        call(
+            &app,
+            "sound_options_set",
+            json!({"dur_fadeout": 4200, "vol_overlay": 7, "use_bs_loudness": false, "bs_target": -16}),
+        )
+        .await,
     );
     assert_eq!(got["dur_fadeout"], 4200);
     assert_eq!(got["vol_overlay"], 7);
+    assert_eq!(got["use_bs_loudness"], false);
+    assert_eq!(got["bs_target"], -16);
 
     // Live engine picked the knobs up...
     let cfg = app.engine.config();
     assert_eq!(cfg.default_fade_out_ms, 4200);
     assert_eq!(cfg.overlay_db, 7.0);
 
-    // ...and they survive a settings reload from disk.
+    // ...and they survive a settings reload from disk, including the
+    // loudness knobs stored under the RadioDJ XML key spellings.
     let app2 = Arc::new(App::load(app.config_dir()).expect("reload"));
     let got = result_of(call(&app2, "sound_options_get", json!({})).await);
     assert_eq!(got["dur_fadeout"], 4200);
+    assert_eq!(got["use_bs_loudness"], false);
+    assert_eq!(got["bs_target"], -16);
 }
 
 #[tokio::test]

@@ -473,6 +473,10 @@ export interface SoundOptions {
   vol_overlay: number;
   vol_onsweeper: number;
   vol_vt: number;
+  /** Playout gain source: scanned `bs_loudness` column (true) or the legacy one (false). */
+  use_bs_loudness: boolean;
+  /** Loudness-scan target in dBFS below zero (`BSTarget`, RadioDJ default -12). */
+  bs_target: number;
 }
 
 /** Master sound processing (`fx_get` / `fx_set`), keys named like the
