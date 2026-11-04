@@ -65,4 +65,6 @@ done, verified, and what remains (UI surface parity, packaging for the shell).
 
 Clean-room reimplementation from behavioral observation. The original RadioDJ is
 copyright of its author (radiodj.ro); do not distribute original binaries with this
-project. See `reference/` for the upstream GPL-licensed SQL scripts.
+project. The internal research corpus (`il/`, `analysis/`, `reference/`, including
+upstream binaries and decompiled output) is kept offline and is not published with
+this repository; docs may refer to paths in it.
