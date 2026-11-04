@@ -232,9 +232,14 @@ RadioDJ `cue_times` DB string: `&sta= &int= &pin=/&pou= &hin=/&hou= &out= &xta= 
      then `podman cp <ctr>:/src/target/debug/radiocraft-window …`.
 - CI (`.github/workflows/ci.yml`): `test (linux)` = ubuntu + apt deps
   (`libasound2-dev libx11-dev pkg-config libwebkit2gtk-4.1-dev libgtk-3-dev
-  libayatana-appindicator3-dev librsvg2-dev`) → `cargo test --workspace` +
+  libayatana-appindicator3-dev librsvg2-dev`) + `npm ci && npm run build` in
+  `web/` (the tauri build script aborts if `../../web/dist` is missing) +
+  `cargo build -p radiocraft-plugin-example` (the dylib e2e test dlopens
+  `target/debug/libradiocraft_plugin_example.so`, which `cargo test` alone
+  never emits) → `cargo test --workspace` +
   `cargo clippy --workspace --all-targets -- -D warnings`; `appimage` job builds web then
   `CONTAINER=docker IMAGE=manyrust bash scripts/build-appimage.sh`.
+  First green run: `41876224115` on public HEAD `9a0b24f` (2026-11-04).
 - Host now has the native window toolchain (2026-11-03: `dbus-devel clang
   glib2-devel gtk3-devel webkit2gtk4.1-devel libappindicator-gtk3-devel
   librsvg2-devel` installed via sudo dnf), so `cargo build/test/clippy
