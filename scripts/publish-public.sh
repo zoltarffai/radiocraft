@@ -19,7 +19,7 @@ PUBLIC_DIR="${PUBLIC_DIR:-$HOME/Dev/radiocraft-public}"
 GITHUB_REPO="${GITHUB_REPO:-zoltarffai/radiocraft}"
 
 if [ ! -d "$PUBLIC_DIR/.git" ]; then
-  git clone "$FULL_REPO" "$PUBLIC_DIR"
+  git clone --no-local "$FULL_REPO" "$PUBLIC_DIR"
 fi
 
 cd "$PUBLIC_DIR"
